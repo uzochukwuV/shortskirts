@@ -1,0 +1,109 @@
+Yes, exactly — that's the right instinct. Here's the full consistency strategy:
+
+## Character Consistency: The "Character Bible" Approach
+
+**Initial Setup (once per character):**
+1. Generate 3–5 reference images of the character from different angles (front, side, 3/4 view) using an image model first
+2. Store those reference images in B2
+3. Store their embeddings + metadata in CockroachDB
+
+**Per Scene Generation:**
+- Pull that character's reference images from B2
+- Feed up to 5 reference assets into Wan 2.7 per call
+- The model uses them to maintain likeness across clips
+
+---
+
+## Scene Continuity: The Screenshot Strategy
+
+Yes, screenshots are actually the best tool here. The pipeline would be:
+
+```
+End of Scene 3
+    → Extract last frame (screenshot)
+    → Save to B2 as "scene3_exit_frame.jpg"
+    → Feed as reference_video/image into Scene 4 generation
+    → CockroachDB logs: which frame was used, character positions, lighting state
+```
+
+This is called **"frame bridging"** — the exit frame of scene N becomes the entry reference for scene N+1. It's how you get that seamless cut feel.
+
+---
+
+## The Full Consistency Stack
+
+| Layer | What You Track | Where It Lives |
+|---|---|---|
+| Character Bible | 3-5 ref images per character, voice sample | B2 |
+| Scene Exit Frames | Last frame of every clip | B2 |
+| Story State | Episode summary, character emotions, plot points | CockroachDB (JSON) |
+| Character Embeddings | Visual embedding for similarity search | CockroachDB (vector) |
+| Scene Graph | Who appeared in what scene, wearing what | CockroachDB (relational) |
+
+---
+
+## The Consistency Agent Logic
+
+```python
+def generate_scene(scene_number, characters_in_scene):
+    
+    # 1. Pull character refs from B2
+    refs = []
+    for char in characters_in_scene:
+        refs += get_character_refs(char)  # from B2
+    
+    # 2. Pull exit frame from previous scene
+    if scene_number > 1:
+        exit_frame = get_exit_frame(scene_number - 1)  # from B2
+        refs.append(exit_frame)
+    
+    # 3. Pull story context from CockroachDB
+    story_state = cockroach.query(
+        "SELECT summary, mood, location FROM episode_state 
+         WHERE episode=$1 AND scene=$2", 
+        [episode, scene_number - 1]
+    )
+    
+    # 4. Build enriched prompt
+    prompt = f"""
+    Scene {scene_number}. 
+    Previous context: {story_state.summary}
+    Current mood: {story_state.mood}
+    Location: {story_state.location}
+    Action: {scene_description}
+    Anime style, consistent with reference characters.
+    """
+    
+    # 5. Generate with Wan 2.7
+    clip = wan.generate(prompt=prompt, references=refs[:5])
+    
+    # 6. Immediately save to B2 (URLs expire in 24hrs)
+    b2.save(clip, f"episode_{ep}/scene_{scene_number}.mp4")
+    
+    # 7. Extract exit frame for next scene
+    exit_frame = extract_last_frame(clip)
+    b2.save(exit_frame, f"episode_{ep}/scene_{scene_number}_exit.jpg")
+    
+    # 8. Update CockroachDB state
+    cockroach.update_scene_state(episode, scene_number, clip_metadata)
+```
+
+---
+
+## The Real Limitation to Know
+
+Wan caps at **5 reference assets total per call**. So if you have 3 characters in a scene, that's 3 character refs + 1 exit frame = 4, leaving you 1 slot. You'd need to be smart about priority — main character always gets a ref slot, supporting characters share or get dropped based on scene importance. CockroachDB tracks this so the agent decides automatically.
+
+---
+
+## For the 8-Day Qwen Deadline
+
+Honestly, **don't try to solve full consistency by July 10**. Win the track with:
+- Story agent that writes a 5-scene episode plan
+- Character bible generation (image model → B2)
+- Frame bridging between scenes (exit frame → next scene input)
+- Final stitched video output
+
+That's already more sophisticated than 90% of submissions. Full vector memory layer can come in for the CockroachDB hackathon (deadline Aug 19).
+
+Want me to scaffold the actual codebase structure for you to start building tonight?

@@ -1,0 +1,74 @@
+Let me check the actual SDKs before recommending anything.Clear answer now. Here's the verdict:
+
+## **Python. No contest.**
+
+Here's why, based on actual SDK evidence:
+
+---
+
+## SDK Reality Check
+
+| Integration | Python | Node |
+|---|---|---|
+| **Genblaze** | ✅ Python-only SDK (monorepo, `pip install genblaze`) | ❌ None |
+| **Qwen / DashScope** | ✅ Official `dashscope` SDK (v1.26.0 on PyPI) | ⚠️ Community-only, unmaintained |
+| **Qwen via OpenAI-compat** | ✅ `openai` Python SDK works (v2.44.0) | ✅ Works too |
+| **CockroachDB** | ✅ `psycopg2` / `asyncpg` (PostgreSQL-compatible) | ✅ `pg` works |
+| **Backblaze B2** | ✅ `b2sdk` official Python SDK | ⚠️ Third-party only |
+
+Genblaze being **Python-only** is the deciding factor. You'd be fighting the framework the entire hackathon if you used Node.
+
+---
+
+## Recommended Stack
+
+```
+Python 3.11+
+├── genblaze          # media pipeline orchestration + B2 storage
+├── dashscope         # Qwen video/image/audio generation (official)
+├── openai            # fallback OpenAI-compat calls to Qwen
+├── asyncpg           # async CockroachDB connection (faster than psycopg2)
+├── pgvector          # vector similarity for character embeddings  
+├── fastapi           # lightweight API layer
+├── celery + redis    # async task queue for video generation jobs
+└── boto3             # direct B2/S3 access when needed outside genblaze
+```
+
+---
+
+## Project Structure
+
+```
+storyforge-anime/
+├── api/
+│   ├── main.py              # FastAPI routes
+│   └── routes/
+│       ├── stories.py       # create story, generate episode
+│       └── characters.py    # character bible management
+├── pipeline/
+│   ├── story_agent.py       # Qwen LLM → episode plan
+│   ├── character_gen.py     # generate + store character refs
+│   ├── scene_gen.py         # Wan video generation per scene
+│   ├── consistency.py       # frame bridging + ref retrieval
+│   └── assembler.py         # stitch clips → episode
+├── storage/
+│   ├── b2.py                # Genblaze/B2 wrappers
+│   └── memory.py            # CockroachDB read/write (asyncpg)
+├── models/
+│   ├── character.py         # Character dataclass + embedding
+│   ├── scene.py             # Scene state
+│   └── episode.py           # Episode manifest
+├── tasks/
+│   └── generate.py          # Celery async tasks
+├── db/
+│   └── schema.sql           # CockroachDB tables + vector indexes
+└── requirements.txt
+```
+
+---
+
+## One Thing to Note on Qwen Deadline
+
+Since you have **8 days**, skip Celery for now — use `asyncio` + FastAPI background tasks instead. That's one less moving part. Add the task queue after the Qwen submission.
+
+Want me to scaffold `schema.sql` and the core `pipeline/` files to get you started tonight?

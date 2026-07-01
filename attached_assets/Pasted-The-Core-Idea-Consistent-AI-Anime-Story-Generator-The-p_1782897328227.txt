@@ -1,0 +1,46 @@
+The Core Idea: Consistent AI Anime Story Generator
+The pain point you've identified is real — current AI video tools generate isolated clips, but anime storytelling requires character consistency, scene continuity, and narrative arc across episodes. That's the hard problem nobody has fully solved.
+
+Product Vision: "StoryForge Anime"
+An agentic pipeline that takes a story prompt and auto-generates a multi-episode anime series with:
+
+Consistent characters across scenes (same face, outfit, style)
+Persistent story memory — the agent remembers what happened in episode 1 when generating episode 5
+Scene-to-scene continuity — settings, lighting, props carry over
+Voiceover + subtitles auto-generated in English/Chinese/JP
+TikTok/Reels-ready output — vertical format, episodic hooks
+
+
+Hackathon Fit (Stack All Three)
+HackathonHow You Use ItPrize PoolBackblazeStore generated video clips, thumbnails, character reference sheets, episode metadata on B2 via Genblaze SDK$10KQwenTrack 2: AI Showrunner — literally built for this. Script → storyboard → video pipeline using Wan/HappyHorse$7KCockroachDB × AWSPersistent character memory (embeddings of character appearance, story state, user preferences) via CockroachDB vector indexing + Bedrock for inference$8.75K
+Total prize exposure: ~$25K+, and these stacks are genuinely complementary, not forced.
+
+Technical Architecture
+User Prompt: "Lonely cultivator discovers ancient sword"
+        ↓
+[Qwen - Story Agent]
+  → Generates episode scripts + scene breakdowns
+  → Stores story state in CockroachDB (scene graph, character states)
+        ↓
+[Character Consistency Layer]
+  → Character embeddings stored in CockroachDB vector index
+  → Reference images pulled from B2 on each generation call
+        ↓
+[Qwen Wan / Runway / Luma - Video Generation]
+  → Scene-by-scene video clips generated with character refs
+        ↓
+[Genblaze SDK orchestration]
+  → ElevenLabs for voice, Stability Audio for BGM
+  → All assets piped to Backblaze B2
+        ↓
+[Output]
+  → Assembled episode → served from B2 CDN
+  → TikTok/Reels ready
+
+What Makes This Genuinely Hard (and valuable)
+The character consistency problem is what separates this from toys. Your CockroachDB angle is storing character "DNA" — embeddings of their visual appearance, personality traits, story role — and retrieving them as context on every generation call. That's the agentic memory angle the CockroachDB judges want to see, and it's a real technical contribution.
+
+Honest Assessment
+Qwen Track 2 deadline is July 10 — that's 8 days. That's your forcing function. Build the MVP there first (script → storyboard → video clips, even without full consistency), then layer in CockroachDB memory and Backblaze storage for the longer-deadline hackathons.
+The TikTok Chinese anime niche is genuinely underserved by Western tools. That's a real market insight worth building on.
+Want me to sketch out the MVP scope for the Qwen deadline specifically?
