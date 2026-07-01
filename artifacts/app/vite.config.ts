@@ -66,6 +66,16 @@ export default defineConfig({
     fs: {
       strict: true,
     },
+    proxy: {
+      "/pipeline": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
+      "/api": {
+        target: "http://localhost:3001",
+        changeOrigin: true,
+      },
+    },
   },
   preview: {
     port,
