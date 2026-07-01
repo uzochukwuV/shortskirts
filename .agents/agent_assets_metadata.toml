@@ -1,0 +1,8 @@
+uploads = []
+outputs = []
+
+[[generated]]
+id = "yka9AgtwgiIA1rsdHuK-F"
+uri = "file://artifacts/app/public/hero-anime.png"
+type = "image"
+title = "Cinematic tech anime editing suite"
