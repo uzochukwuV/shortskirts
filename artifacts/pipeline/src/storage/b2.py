@@ -8,33 +8,25 @@ def _env(key: str) -> str:
     return os.environ[key].strip()
 
 
-def _make_client(key_id: str, app_key: str):
+def get_write_client():
+    """Write key — used for all uploads and deletes."""
     return boto3.client(
         "s3",
         endpoint_url=f"https://{_env('B2_ENDPOINT_URL')}",
-        aws_access_key_id=key_id,
-        aws_secret_access_key=app_key,
+        aws_access_key_id=_env("B2_KEY_ID"),
+        aws_secret_access_key=_env("B2_APPLICATION_KEY"),
         config=Config(signature_version="s3v4"),
         region_name="us-east-005",
     )
 
 
-def get_write_client():
-    """Write-only key — used for uploads and deletes."""
-    return _make_client(_env("B2_KEY_ID"), _env("B2_APPLICATION_KEY"))
+def BUCKET() -> str:
+    return _env("B2_BUCKET_NAME")
 
 
-def get_read_client():
-    """Read-only key — used for downloads and presigned URLs.
-    Falls back to the write key if no separate read key is configured."""
-    read_key_id = os.environ.get("B2_READ_KEY_ID", "").strip()
-    read_app_key = os.environ.get("B2_READ_APPLICATION_KEY", "").strip()
-    if read_key_id and read_app_key:
-        return _make_client(read_key_id, read_app_key)
-    return get_write_client()
-
-
-BUCKET = lambda: _env("B2_BUCKET_NAME")
+def public_url(key: str) -> str:
+    """Direct public URL — works when bucket is set to Public in Backblaze."""
+    return f"https://{_env('B2_ENDPOINT_URL')}/{BUCKET()}/{key}"
 
 
 def upload_bytes(data: bytes, key: str, content_type: str = "application/octet-stream") -> str:
@@ -44,7 +36,7 @@ def upload_bytes(data: bytes, key: str, content_type: str = "application/octet-s
         Body=data,
         ContentType=content_type,
     )
-    return f"https://{_env('B2_ENDPOINT_URL')}/{BUCKET()}/{key}"
+    return public_url(key)
 
 
 def upload_file(local_path: str, key: str, content_type: str = "application/octet-stream") -> str:
@@ -55,7 +47,7 @@ def upload_file(local_path: str, key: str, content_type: str = "application/octe
             Body=f,
             ContentType=content_type,
         )
-    return f"https://{_env('B2_ENDPOINT_URL')}/{BUCKET()}/{key}"
+    return public_url(key)
 
 
 async def download_url_to_bytes(url: str) -> bytes:
@@ -71,11 +63,8 @@ async def download_and_upload(url: str, key: str, content_type: str = "video/mp4
 
 
 def get_presigned_url(key: str, expires: int = 3600) -> str:
-    return get_read_client().generate_presigned_url(
-        "get_object",
-        Params={"Bucket": BUCKET(), "Key": key},
-        ExpiresIn=expires,
-    )
+    """Returns a direct public URL — requires bucket to be set Public in Backblaze."""
+    return public_url(key)
 
 
 def build_key(story_id: str, *parts: str) -> str:
