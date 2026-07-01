@@ -1,0 +1,13 @@
+kind = "api"
+previewPath = "/pipeline"
+title = "StoryForge Pipeline"
+version = "1.0.0"
+id = "pipeline-storyforge-001"
+
+[[services]]
+localPort = 5001
+name = "StoryForge Pipeline"
+paths = ["/pipeline"]
+
+[services.development]
+run = "bash artifacts/pipeline/run.sh"
