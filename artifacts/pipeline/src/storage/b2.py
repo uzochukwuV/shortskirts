@@ -7,18 +7,22 @@ from botocore.config import Config
 from typing import Optional
 
 
+def _env(key: str) -> str:
+    return os.environ[key].strip()
+
+
 def get_b2_client():
     return boto3.client(
         "s3",
-        endpoint_url=f"https://{os.environ['B2_ENDPOINT_URL']}",
-        aws_access_key_id=os.environ["B2_KEY_ID"],
-        aws_secret_access_key=os.environ["B2_APPLICATION_KEY"],
+        endpoint_url=f"https://{_env('B2_ENDPOINT_URL')}",
+        aws_access_key_id=_env("B2_KEY_ID"),
+        aws_secret_access_key=_env("B2_APPLICATION_KEY"),
         config=Config(signature_version="s3v4"),
         region_name="us-east-005",
     )
 
 
-BUCKET = lambda: os.environ["B2_BUCKET_NAME"]
+BUCKET = lambda: _env("B2_BUCKET_NAME")
 
 
 def upload_bytes(data: bytes, key: str, content_type: str = "application/octet-stream") -> str:
