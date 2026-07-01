@@ -40,10 +40,15 @@ async def generate_scene_clip(
     task_id = await _submit_video_task(prompt, reference_image)
     video_url = await _poll_video_task(task_id)
 
-    clip_key = build_key(story_id, "episodes", episode_id, "scenes", f"scene_{scene_number}.mp4")
-    b2_clip_url = await download_and_upload(video_url, clip_key, "video/mp4")
+    # Download video bytes once — reuse for both B2 upload and exit frame extraction
+    from storage.b2 import download_url_to_bytes, upload_bytes as b2_upload_bytes
+    clip_bytes = await download_url_to_bytes(video_url)
 
-    exit_frame_url = await extract_exit_frame(b2_clip_url, story_id, episode_id, scene_number)
+    clip_key = build_key(story_id, "episodes", episode_id, "scenes", f"scene_{scene_number}.mp4")
+    b2_clip_url = b2_upload_bytes(clip_bytes, clip_key, "video/mp4")
+
+    # Extract exit frame from in-memory bytes (no B2 read needed)
+    exit_frame_url = await extract_exit_frame_from_bytes(clip_bytes, story_id, episode_id, scene_number)
 
     return {
         "clip_url": b2_clip_url,
@@ -166,18 +171,15 @@ async def _poll_video_task(task_id: str, timeout: int = 600) -> str:
     raise TimeoutError(f"Video task {task_id} timed out after {timeout}s")
 
 
-async def extract_exit_frame(
-    clip_url: str,
+async def extract_exit_frame_from_bytes(
+    clip_bytes: bytes,
     story_id: str,
     episode_id: str,
     scene_number: int,
 ) -> Optional[str]:
+    """Extract the last frame from in-memory video bytes and upload to B2.
+    Never reads from B2 — works entirely from the bytes we already downloaded."""
     try:
-        async with httpx.AsyncClient(timeout=60) as http:
-            r = await http.get(clip_url, follow_redirects=True)
-            r.raise_for_status()
-            clip_bytes = r.content
-
         import tempfile, os as _os
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
             tmp.write(clip_bytes)
