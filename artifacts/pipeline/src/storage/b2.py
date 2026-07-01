@@ -25,8 +25,13 @@ def BUCKET() -> str:
 
 
 def public_url(key: str) -> str:
-    """Direct public URL — works when bucket is set to Public in Backblaze."""
-    return f"https://{_env('B2_ENDPOINT_URL')}/{BUCKET()}/{key}"
+    """B2 native CDN URL — works when bucket is Public OR key has readFiles.
+    Format: https://f005.backblazeb2.com/file/{bucket}/{key}
+    To enable: in Backblaze dashboard set bucket to Public, or create a key
+    with the 'readFiles' capability checked.
+    """
+    # Use B2 native CDN URL (not S3 endpoint) for better compatibility
+    return f"https://f005.backblazeb2.com/file/{BUCKET()}/{key}"
 
 
 def upload_bytes(data: bytes, key: str, content_type: str = "application/octet-stream") -> str:
@@ -63,7 +68,7 @@ async def download_and_upload(url: str, key: str, content_type: str = "video/mp4
 
 
 def get_presigned_url(key: str, expires: int = 3600) -> str:
-    """Returns a direct public URL — requires bucket to be set Public in Backblaze."""
+    """Returns the public CDN URL. Requires bucket to be Public or key to have readFiles."""
     return public_url(key)
 
 
