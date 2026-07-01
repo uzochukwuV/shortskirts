@@ -13,7 +13,7 @@ async def _generate_refs_bg(story_id: str, character_id: str, character: dict, s
     pool = await get_pool()
     try:
         urls = await generate_character_references(story_id, character_id, character, style)
-        embedding = await get_character_embedding(character)
+        embedding = get_character_embedding(character)
 
         await pool.execute(
             """UPDATE characters SET ref_image_urls=$1::jsonb, embedding=$2::jsonb

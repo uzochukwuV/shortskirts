@@ -1,33 +1,19 @@
 import os
 import io
-import uuid
 import asyncio
 import httpx
 import time
 from typing import Optional
-from openai import AsyncOpenAI
 
 from storage.b2 import upload_bytes, download_and_upload, build_key
-from pipeline.story_agent import get_client, build_scene_prompt
+from pipeline.story_agent import build_scene_prompt
 
+AIML_BASE_URL = "https://api.aimlapi.com"
 
-async def poll_video_task(task_id: str, timeout: int = 300) -> Optional[str]:
-    client = get_client()
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        await asyncio.sleep(10)
-        try:
-            result = await client.get(
-                f"/tasks/{task_id}",
-            )
-            status = result.get("output", {}).get("task_status")
-            if status == "SUCCEEDED":
-                return result.get("output", {}).get("video_url")
-            elif status in ("FAILED", "CANCELED"):
-                raise RuntimeError(f"Video task {task_id} {status}: {result}")
-        except Exception as e:
-            print(f"[scene_gen] Poll error: {e}")
-    raise TimeoutError(f"Video task {task_id} timed out after {timeout}s")
+# Image-to-video (uses character reference images) — preferred when refs available
+I2V_MODEL = "alibaba/wan2.7-i2v"
+# Text-to-video fallback when no refs
+T2V_MODEL = "alibaba/wan2.1-t2v-turbo"
 
 
 async def generate_scene_clip(
@@ -40,99 +26,137 @@ async def generate_scene_clip(
     previous_scene_summary: str = "",
     style: str = "anime",
 ) -> dict:
-    client = get_client()
     scene_number = scene["scene_number"]
-
     prompt = await build_scene_prompt(scene, story_context, previous_scene_summary, style)
 
-    refs = []
-    for url in character_refs[:4]:
-        refs.append({"type": "image", "url": url})
-    if previous_exit_frame_url and len(refs) < 5:
-        refs.append({"type": "image", "url": previous_exit_frame_url})
+    # Decide i2v vs t2v based on available refs
+    # i2v: use first ref image (character) or exit frame as the reference image
+    reference_image = None
+    if character_refs:
+        reference_image = character_refs[0]
+    elif previous_exit_frame_url:
+        reference_image = previous_exit_frame_url
 
-    try:
-        if refs:
-            payload = {
-                "model": "wan2.1-i2v-turbo",
-                "input": {
-                    "prompt": prompt,
-                    "reference_images": [r["url"] for r in refs[:5]],
-                },
-                "parameters": {
-                    "duration": 5,
-                    "resolution": "576P",
-                },
-            }
-        else:
-            payload = {
-                "model": "wan2.1-t2v-turbo",
-                "input": {"prompt": prompt},
-                "parameters": {
-                    "duration": 5,
-                    "resolution": "576P",
-                },
-            }
+    task_id = await _submit_video_task(prompt, reference_image)
+    video_url = await _poll_video_task(task_id)
 
-        async with httpx.AsyncClient(timeout=30) as http:
-            r = await http.post(
-                "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
-                headers={
-                    "Authorization": f"Bearer {os.environ['DASHSCOPE_API_KEY']}",
-                    "Content-Type": "application/json",
-                    "X-DashScope-Async": "enable",
-                },
-                json=payload,
-            )
-            r.raise_for_status()
-            result = r.json()
+    clip_key = build_key(story_id, "episodes", episode_id, "scenes", f"scene_{scene_number}.mp4")
+    b2_clip_url = await download_and_upload(video_url, clip_key, "video/mp4")
 
-        task_id = result.get("output", {}).get("task_id")
-        if not task_id:
-            raise RuntimeError(f"No task_id from video generation: {result}")
+    exit_frame_url = await extract_exit_frame(b2_clip_url, story_id, episode_id, scene_number)
 
-        video_url = await _poll_dashscope_task(task_id)
+    return {
+        "clip_url": b2_clip_url,
+        "exit_frame_url": exit_frame_url,
+        "duration": 5.0,
+        "prompt": prompt,
+        "refs_used": 1 if reference_image else 0,
+    }
 
-        clip_key = build_key(story_id, "episodes", episode_id, "scenes", f"scene_{scene_number}.mp4")
-        b2_clip_url = await download_and_upload(video_url, clip_key, "video/mp4")
 
-        exit_frame_url = await extract_exit_frame(b2_clip_url, story_id, episode_id, scene_number)
+async def _submit_video_task(prompt: str, image_url: Optional[str] = None) -> str:
+    headers = {
+        "Authorization": f"Bearer {os.environ['AIML_API_KEY']}",
+        "Content-Type": "application/json",
+    }
 
-        return {
-            "clip_url": b2_clip_url,
-            "exit_frame_url": exit_frame_url,
-            "duration": 5.0,
+    if image_url:
+        payload = {
+            "model": I2V_MODEL,
             "prompt": prompt,
-            "refs_used": len(refs),
+            "image_url": image_url,
+            "duration": 5,
+        }
+    else:
+        payload = {
+            "model": T2V_MODEL,
+            "prompt": prompt,
+            "duration": 5,
         }
 
-    except Exception as e:
-        print(f"[scene_gen] Scene {scene_number} generation failed: {e}")
-        raise
+    async with httpx.AsyncClient(timeout=30) as http:
+        r = await http.post(
+            f"{AIML_BASE_URL}/v2/video/generations",
+            headers=headers,
+            json=payload,
+        )
+        if r.status_code != 200:
+            # Fallback: if i2v fails, retry as t2v
+            if image_url:
+                print(f"[scene_gen] i2v failed ({r.status_code}), falling back to t2v")
+                payload = {
+                    "model": T2V_MODEL,
+                    "prompt": prompt,
+                    "duration": 5,
+                }
+                r = await http.post(
+                    f"{AIML_BASE_URL}/v2/video/generations",
+                    headers=headers,
+                    json=payload,
+                )
+        r.raise_for_status()
+        data = r.json()
+
+    task_id = data.get("id") or data.get("generation_id") or data.get("task_id")
+    if not task_id:
+        raise RuntimeError(f"No task ID from video generation: {data}")
+    return task_id
 
 
-async def _poll_dashscope_task(task_id: str, timeout: int = 600) -> str:
+async def _poll_video_task(task_id: str, timeout: int = 600) -> str:
+    headers = {"Authorization": f"Bearer {os.environ['AIML_API_KEY']}"}
     deadline = time.time() + timeout
+
     while time.time() < deadline:
         await asyncio.sleep(15)
-        async with httpx.AsyncClient(timeout=30) as http:
-            r = await http.get(
-                f"https://dashscope-intl.aliyuncs.com/api/v1/tasks/{task_id}",
-                headers={"Authorization": f"Bearer {os.environ['DASHSCOPE_API_KEY']}"},
-            )
-            r.raise_for_status()
-            data = r.json()
+        try:
+            async with httpx.AsyncClient(timeout=30) as http:
+                r = await http.get(
+                    f"{AIML_BASE_URL}/v2/video/generations",
+                    headers=headers,
+                    params={"generation_id": task_id},
+                )
+                r.raise_for_status()
+                data = r.json()
 
-        status = data.get("output", {}).get("task_status", "")
-        if status == "SUCCEEDED":
-            video_url = data.get("output", {}).get("video_url", "")
-            if not video_url:
-                raise RuntimeError(f"SUCCEEDED but no video_url: {data}")
-            return video_url
-        elif status in ("FAILED", "CANCELED"):
-            raise RuntimeError(f"Task {task_id} {status}: {data}")
+            status = (
+                data.get("status")
+                or data.get("task_status")
+                or ""
+            ).lower()
 
-    raise TimeoutError(f"Task {task_id} timed out")
+            print(f"[scene_gen] Task {task_id}: {status}")
+
+            if status in ("completed", "succeeded", "success", "finished"):
+                video_url = (
+                    data.get("video_url")
+                    or data.get("url")
+                    or (data.get("output") or {}).get("video_url")
+                    or (data.get("result") or {}).get("url")
+                )
+                if video_url:
+                    return video_url
+                # Nested output
+                for key in ["output", "result", "data", "generation"]:
+                    nested = data.get(key)
+                    if isinstance(nested, dict):
+                        for vkey in ["video_url", "url", "video", "output_url"]:
+                            if nested.get(vkey):
+                                return nested[vkey]
+                raise RuntimeError(f"Task succeeded but no video URL found: {data}")
+
+            elif status in ("failed", "error", "cancelled", "canceled"):
+                raise RuntimeError(f"Video task failed: {data}")
+
+        except asyncio.TimeoutError:
+            continue
+        except Exception as e:
+            if "failed" in str(e).lower() or "error" in str(e).lower():
+                raise
+            print(f"[scene_gen] Poll error (will retry): {e}")
+            await asyncio.sleep(5)
+
+    raise TimeoutError(f"Video task {task_id} timed out after {timeout}s")
 
 
 async def extract_exit_frame(
@@ -155,7 +179,7 @@ async def extract_exit_frame(
         try:
             from moviepy.editor import VideoFileClip
             with VideoFileClip(tmp_path) as clip:
-                last_frame = clip.get_frame(clip.duration - 0.1)
+                last_frame = clip.get_frame(max(0, clip.duration - 0.1))
         finally:
             _os.unlink(tmp_path)
 

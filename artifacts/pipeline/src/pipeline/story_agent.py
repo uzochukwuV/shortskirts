@@ -4,15 +4,20 @@ from openai import AsyncOpenAI
 
 _client: AsyncOpenAI | None = None
 
-QWEN_MODELS = ["qwen-turbo", "qwen-plus", "qwen-max", "qwen2.5-72b-instruct", "qwen2.5-7b-instruct"]
+AIML_BASE_URL = "https://api.aimlapi.com/v1"
+LLM_MODELS = [
+    "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "gpt-4o-mini",
+    "gpt-4o",
+]
 
 
 def get_client() -> AsyncOpenAI:
     global _client
     if _client is None:
         _client = AsyncOpenAI(
-            api_key=os.environ["DASHSCOPE_API_KEY"],
-            base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+            api_key=os.environ["AIML_API_KEY"],
+            base_url=AIML_BASE_URL,
         )
     return _client
 
@@ -20,7 +25,7 @@ def get_client() -> AsyncOpenAI:
 async def _chat(messages: list, temperature: float = 0.8, max_tokens: int = 4096) -> str:
     client = get_client()
     last_err = None
-    for model in QWEN_MODELS:
+    for model in LLM_MODELS:
         try:
             response = await client.chat.completions.create(
                 model=model,
@@ -30,17 +35,17 @@ async def _chat(messages: list, temperature: float = 0.8, max_tokens: int = 4096
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
-            if "AccessDenied" in str(e) or "403" in str(e) or "Unpurchased" in str(e):
+            err = str(e)
+            if any(x in err for x in ["AccessDenied", "403", "not found", "404", "Model not found"]):
                 last_err = e
                 continue
             raise
     raise RuntimeError(
-        f"No accessible Qwen model found (tried {QWEN_MODELS}). "
-        f"Please activate a model in your DashScope console. Last error: {last_err}"
+        f"No accessible LLM model found (tried {LLM_MODELS}). Last error: {last_err}"
     )
 
 
-STORY_PLANNER_SYSTEM = """You are a creative anime story director. Given a story prompt, genre, and style, 
+STORY_PLANNER_SYSTEM = """You are a creative anime story director. Given a story prompt, genre, and style,
 generate a detailed episode plan as valid JSON. Be vivid and cinematic.
 
 Return ONLY valid JSON with this exact structure:
