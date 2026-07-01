@@ -128,6 +128,11 @@ async def _poll_video_task(task_id: str, timeout: int = 600) -> str:
             print(f"[scene_gen] Task {task_id}: {status}")
 
             if status in ("completed", "succeeded", "success", "finished"):
+                # AIML API response: {"video": {"url": "..."}, ...}
+                video_obj = data.get("video")
+                if isinstance(video_obj, dict) and video_obj.get("url"):
+                    return video_obj["url"]
+                # Fallbacks for other response shapes
                 video_url = (
                     data.get("video_url")
                     or data.get("url")
@@ -136,11 +141,13 @@ async def _poll_video_task(task_id: str, timeout: int = 600) -> str:
                 )
                 if video_url:
                     return video_url
-                # Nested output
                 for key in ["output", "result", "data", "generation"]:
                     nested = data.get(key)
                     if isinstance(nested, dict):
-                        for vkey in ["video_url", "url", "video", "output_url"]:
+                        inner = nested.get("video")
+                        if isinstance(inner, dict) and inner.get("url"):
+                            return inner["url"]
+                        for vkey in ["video_url", "url", "output_url"]:
                             if nested.get(vkey):
                                 return nested[vkey]
                 raise RuntimeError(f"Task succeeded but no video URL found: {data}")
