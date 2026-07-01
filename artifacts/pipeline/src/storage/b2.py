@@ -1,55 +1,61 @@
 import boto3
 import os
-import io
-import uuid
 import httpx
 from botocore.config import Config
-from typing import Optional
 
 
 def _env(key: str) -> str:
     return os.environ[key].strip()
 
 
-def get_b2_client():
+def _make_client(key_id: str, app_key: str):
     return boto3.client(
         "s3",
         endpoint_url=f"https://{_env('B2_ENDPOINT_URL')}",
-        aws_access_key_id=_env("B2_KEY_ID"),
-        aws_secret_access_key=_env("B2_APPLICATION_KEY"),
+        aws_access_key_id=key_id,
+        aws_secret_access_key=app_key,
         config=Config(signature_version="s3v4"),
         region_name="us-east-005",
     )
+
+
+def get_write_client():
+    """Write-only key — used for uploads and deletes."""
+    return _make_client(_env("B2_KEY_ID"), _env("B2_APPLICATION_KEY"))
+
+
+def get_read_client():
+    """Read-only key — used for downloads and presigned URLs.
+    Falls back to the write key if no separate read key is configured."""
+    read_key_id = os.environ.get("B2_READ_KEY_ID", "").strip()
+    read_app_key = os.environ.get("B2_READ_APPLICATION_KEY", "").strip()
+    if read_key_id and read_app_key:
+        return _make_client(read_key_id, read_app_key)
+    return get_write_client()
 
 
 BUCKET = lambda: _env("B2_BUCKET_NAME")
 
 
 def upload_bytes(data: bytes, key: str, content_type: str = "application/octet-stream") -> str:
-    client = get_b2_client()
-    client.put_object(
+    get_write_client().put_object(
         Bucket=BUCKET(),
         Key=key,
         Body=data,
         ContentType=content_type,
     )
-    endpoint = os.environ["B2_ENDPOINT_URL"]
-    bucket = BUCKET()
-    return f"https://{endpoint}/{bucket}/{key}"
+    return f"https://{_env('B2_ENDPOINT_URL')}/{BUCKET()}/{key}"
 
 
 def upload_file(local_path: str, key: str, content_type: str = "application/octet-stream") -> str:
-    client = get_b2_client()
     with open(local_path, "rb") as f:
-        client.put_object(
+        get_write_client().put_object(
             Bucket=BUCKET(),
             Key=key,
             Body=f,
             ContentType=content_type,
         )
-    endpoint = os.environ["B2_ENDPOINT_URL"]
-    bucket = BUCKET()
-    return f"https://{endpoint}/{bucket}/{key}"
+    return f"https://{_env('B2_ENDPOINT_URL')}/{BUCKET()}/{key}"
 
 
 async def download_url_to_bytes(url: str) -> bytes:
@@ -65,8 +71,7 @@ async def download_and_upload(url: str, key: str, content_type: str = "video/mp4
 
 
 def get_presigned_url(key: str, expires: int = 3600) -> str:
-    client = get_b2_client()
-    return client.generate_presigned_url(
+    return get_read_client().generate_presigned_url(
         "get_object",
         Params={"Bucket": BUCKET(), "Key": key},
         ExpiresIn=expires,
