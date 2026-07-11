@@ -46,15 +46,48 @@ async def run_story_generation(story_id: str, job_id: str):
         total_steps = total_episodes * story["num_scenes"] + 2
         step = 0
 
-        await update_job(pool, job_id, total_steps=total_steps, current_step="Loading characters")
+        # ── Generate character reference images ───────────────────────────────
+        await update_job(pool, job_id, total_steps=total_steps, current_step="Generating character references")
+        characters = await pool.fetch("SELECT * FROM characters WHERE story_id = $1", story_id)
+        char_map: dict = {}
 
-        characters = await pool.fetch(
-            "SELECT * FROM characters WHERE story_id = $1", story_id
-        )
-        char_map = {r["name"]: dict(r) for r in characters}
+        for char_row in characters:
+            char_dict = dict(char_row)
+            char_name = char_dict["name"]
+
+            # Generate ref images if not already done
+            refs = char_dict.get("ref_image_urls")
+            if isinstance(refs, str):
+                refs = json.loads(refs)
+
+            if not refs:
+                await update_job(pool, job_id, current_step=f"Generating refs for {char_name}")
+                try:
+                    char_id = str(char_dict["id"])
+                    ref_urls = await generate_character_references(
+                        story_id=story_id,
+                        character_id=char_id,
+                        character=char_dict,
+                        style=story["style"],
+                        num_refs=3,
+                    )
+                    embedding = get_character_embedding(char_dict)
+                    await pool.execute(
+                        """UPDATE characters SET ref_image_urls=$1::jsonb, embedding=$2::jsonb
+                           WHERE id=$3""",
+                        json.dumps(ref_urls),
+                        json.dumps(embedding),
+                        char_id,
+                    )
+                    char_dict["ref_image_urls"] = ref_urls
+                except Exception as e:
+                    print(f"[orchestrator] Character ref gen failed for {char_name}: {e}")
+
+            char_map[char_name] = char_dict
 
         step += 1
 
+        # ── Generate scenes per episode ───────────────────────────────────────
         for ep_plan in plan.get("episodes", []):
             ep_num = ep_plan["episode_number"]
             await update_job(
@@ -75,9 +108,7 @@ async def run_story_generation(story_id: str, job_id: str):
                 )
             else:
                 ep_id = str(ep_row["id"])
-                await pool.execute(
-                    "UPDATE episodes SET status = 'running' WHERE id = $1", ep_id
-                )
+                await pool.execute("UPDATE episodes SET status = 'running' WHERE id = $1", ep_id)
 
             previous_exit_frame = None
             previous_summary = ""
@@ -95,14 +126,33 @@ async def run_story_generation(story_id: str, job_id: str):
                     "SELECT id FROM scenes WHERE episode_id = $1 AND scene_number = $2",
                     ep_id, scene_num,
                 )
+
+                # Store full scene plan data in generation_metadata at insert time
+                plan_metadata = json.dumps({
+                    "title": scene_plan.get("title", f"Scene {scene_num}"),
+                    "description": scene_plan.get("description", ""),
+                    "visual_prompt": scene_plan.get("visual_prompt", ""),
+                    "mood": scene_plan.get("mood", ""),
+                    "location": scene_plan.get("location", ""),
+                    "action": scene_plan.get("action", ""),
+                    "characters_present": scene_plan.get("characters_present", []),
+                })
+
                 if not scene_row:
                     scene_id = await pool.fetchval(
-                        """INSERT INTO scenes (episode_id, scene_number, prompt, status)
-                           VALUES ($1, $2, $3, 'running') RETURNING id""",
-                        ep_id, scene_num, scene_plan.get("visual_prompt", scene_plan.get("description", "")),
+                        """INSERT INTO scenes (episode_id, scene_number, prompt, status, generation_metadata)
+                           VALUES ($1, $2, $3, 'running', $4::jsonb) RETURNING id""",
+                        ep_id, scene_num,
+                        scene_plan.get("visual_prompt", scene_plan.get("description", "")),
+                        plan_metadata,
                     )
                 else:
                     scene_id = str(scene_row["id"])
+                    # Update metadata for existing scene (re-generation case)
+                    await pool.execute(
+                        "UPDATE scenes SET generation_metadata=$1::jsonb WHERE id=$2",
+                        plan_metadata, scene_id,
+                    )
 
                 chars_in_scene = scene_plan.get("characters_present", [])
                 char_refs = []
@@ -113,7 +163,6 @@ async def run_story_generation(story_id: str, job_id: str):
                         if isinstance(refs, str):
                             refs = json.loads(refs)
                         char_refs.extend(refs or [])
-
                 char_refs = char_refs[:4]
 
                 try:
@@ -128,6 +177,18 @@ async def run_story_generation(story_id: str, job_id: str):
                         style=story["style"],
                     )
 
+                    # Merge generation result into metadata
+                    merged_meta = json.dumps({
+                        "title": scene_plan.get("title", f"Scene {scene_num}"),
+                        "description": scene_plan.get("description", ""),
+                        "visual_prompt": result["prompt"],
+                        "mood": scene_plan.get("mood", ""),
+                        "location": scene_plan.get("location", ""),
+                        "action": scene_plan.get("action", ""),
+                        "characters_present": scene_plan.get("characters_present", []),
+                        "refs_used": result.get("refs_used", 0),
+                    })
+
                     await pool.execute(
                         """UPDATE scenes SET clip_url=$1, exit_frame_url=$2, duration=$3,
                            status='completed', generation_metadata=$4::jsonb
@@ -135,7 +196,7 @@ async def run_story_generation(story_id: str, job_id: str):
                         result["clip_url"],
                         result.get("exit_frame_url"),
                         result.get("duration", 5.0),
-                        json.dumps({"prompt": result["prompt"], "refs_used": result.get("refs_used", 0)}),
+                        merged_meta,
                         scene_id,
                     )
 
@@ -151,9 +212,7 @@ async def run_story_generation(story_id: str, job_id: str):
 
                 except Exception as e:
                     print(f"[orchestrator] Scene {scene_num} failed: {e}")
-                    await pool.execute(
-                        "UPDATE scenes SET status='failed' WHERE id=$1", scene_id
-                    )
+                    await pool.execute("UPDATE scenes SET status='failed' WHERE id=$1", scene_id)
 
                 step += 1
 
@@ -170,9 +229,7 @@ async def run_story_generation(story_id: str, job_id: str):
                     await pool.execute(
                         """UPDATE episodes SET assembled_video_url=$1, manifest_url=$2, status='completed'
                            WHERE id=$3""",
-                        asm["assembled_video_url"],
-                        asm["manifest_url"],
-                        ep_id,
+                        asm["assembled_video_url"], asm["manifest_url"], ep_id,
                     )
                 except Exception as e:
                     print(f"[orchestrator] Assembly failed for ep {ep_num}: {e}")
@@ -180,7 +237,8 @@ async def run_story_generation(story_id: str, job_id: str):
             else:
                 await pool.execute("UPDATE episodes SET status='failed' WHERE id=$1", ep_id)
 
-        await pool.execute("UPDATE stories SET status='ready' WHERE id=$1", story_id)
+        # ── Fix: use 'completed' not 'ready' ──────────────────────────────────
+        await pool.execute("UPDATE stories SET status='completed' WHERE id=$1", story_id)
         await update_job(
             pool, job_id,
             status="completed",

@@ -1,14 +1,18 @@
 import os
-import hashlib
-import httpx
 import math
+import httpx
 from typing import Optional
 
 from storage.b2 import upload_bytes, build_key
-from pipeline.story_agent import get_client, generate_character_image_prompt
+from pipeline.story_agent import generate_character_image_prompt
 
+QWEN_IMAGE_BASE = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 AIML_BASE_URL = "https://api.aimlapi.com"
-IMAGE_MODELS = ["alibaba/wan2.7-image", "flux/schnell"]
+
+# DashScope image models (primary)
+QWEN_IMAGE_MODELS = ["wanx2.1-t2i-turbo", "wanx-v1"]
+# AIML image models (fallback)
+AIML_IMAGE_MODELS = ["alibaba/wan2.7-image", "flux/schnell"]
 
 
 async def generate_character_references(
@@ -36,14 +40,27 @@ async def generate_character_references(
 
 
 async def _generate_image(prompt: str) -> Optional[bytes]:
-    last_err = None
-    for model in IMAGE_MODELS:
+    # Try DashScope / Qwen Cloud first
+    result = await _try_dashscope_image(prompt)
+    if result:
+        return result
+
+    # Fallback: AIML
+    return await _try_aiml_image(prompt)
+
+
+async def _try_dashscope_image(prompt: str) -> Optional[bytes]:
+    dashscope_key = os.environ.get("DASHSCOPE_API_KEY", "")
+    if not dashscope_key:
+        return None
+
+    for model in QWEN_IMAGE_MODELS:
         try:
-            async with httpx.AsyncClient(timeout=60) as http:
+            async with httpx.AsyncClient(timeout=90) as http:
                 r = await http.post(
-                    f"{AIML_BASE_URL}/v1/images/generations",
+                    f"{QWEN_IMAGE_BASE}/images/generations",
                     headers={
-                        "Authorization": f"Bearer {os.environ['AIML_API_KEY']}",
+                        "Authorization": f"Bearer {dashscope_key}",
                         "Content-Type": "application/json",
                     },
                     json={"model": model, "prompt": prompt, "n": 1, "size": "1024x1024"},
@@ -55,23 +72,52 @@ async def _generate_image(prompt: str) -> Optional[bytes]:
             async with httpx.AsyncClient(timeout=60) as http:
                 img_r = await http.get(image_url, follow_redirects=True)
                 img_r.raise_for_status()
+                print(f"[character_gen] Generated image via DashScope model: {model}")
                 return img_r.content
 
         except Exception as e:
-            last_err = e
-            print(f"[character_gen] Image model {model} failed: {e}")
+            print(f"[character_gen] DashScope image model {model} failed: {str(e)[:80]}")
             continue
 
-    print(f"[character_gen] All image models failed. Last: {last_err}")
+    return None
+
+
+async def _try_aiml_image(prompt: str) -> Optional[bytes]:
+    aiml_key = os.environ.get("AIML_API_KEY", "")
+    if not aiml_key:
+        return None
+
+    for model in AIML_IMAGE_MODELS:
+        try:
+            async with httpx.AsyncClient(timeout=60) as http:
+                r = await http.post(
+                    f"{AIML_BASE_URL}/v1/images/generations",
+                    headers={
+                        "Authorization": f"Bearer {aiml_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"model": model, "prompt": prompt, "n": 1, "size": "1024x1024"},
+                )
+                r.raise_for_status()
+                data = r.json()
+
+            image_url = data["data"][0]["url"]
+            async with httpx.AsyncClient(timeout=60) as http:
+                img_r = await http.get(image_url, follow_redirects=True)
+                img_r.raise_for_status()
+                print(f"[character_gen] Generated image via AIML model: {model}")
+                return img_r.content
+
+        except Exception as e:
+            print(f"[character_gen] AIML image model {model} failed: {str(e)[:80]}")
+            continue
+
+    print("[character_gen] All image models failed.")
     return None
 
 
 def get_character_embedding(character: dict) -> list[float]:
-    """
-    Deterministic pseudo-embedding from character description.
-    Stored as JSONB in CockroachDB for semantic similarity queries.
-    In production: swap for a real embedding API call.
-    """
+    """Deterministic pseudo-embedding. Replace with real embedding API in production."""
     text = (
         f"{character['name']} {character.get('appearance', '')} "
         f"{character.get('personality', '')} {character.get('role', '')}"
@@ -82,6 +128,5 @@ def get_character_embedding(character: dict) -> list[float]:
     for i, ch in enumerate(text):
         vec[i % dim] += ord(ch) / 1000.0
 
-    # Normalise
     norm = math.sqrt(sum(x * x for x in vec)) or 1.0
     return [x / norm for x in vec]

@@ -4,10 +4,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from db.connection import init_db, close_pool
-from routes.stories import router as stories_router
+from routes.stories    import router as stories_router
 from routes.characters import router as characters_router
-from routes.episodes import router as episodes_router
-from routes.jobs import router as jobs_router
+from routes.episodes   import router as episodes_router
+from routes.scenes     import router as scenes_router
+from routes.bibles     import router as bibles_router
+from routes.jobs       import router as jobs_router
 
 
 @asynccontextmanager
@@ -19,8 +21,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="StoryForge Anime API",
-    description="Agentic AI anime story generation pipeline",
-    version="1.0.0",
+    description="AI Showrunner for branded short-form video series",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -35,30 +37,64 @@ app.add_middleware(
 app.include_router(stories_router)
 app.include_router(characters_router)
 app.include_router(episodes_router)
+app.include_router(scenes_router)
+app.include_router(bibles_router)
 app.include_router(jobs_router)
 
 
 @app.get("/pipeline/health")
 async def health():
-    return {"status": "ok", "service": "storyforge-anime-pipeline"}
+    return {"status": "ok", "service": "storyforge-anime-pipeline", "version": "2.0.0"}
 
 
 @app.get("/pipeline")
 async def root():
     return {
         "service": "StoryForge Anime Pipeline",
-        "version": "1.0.0",
-        "endpoints": [
-            "POST /pipeline/stories",
-            "GET  /pipeline/stories",
-            "GET  /pipeline/stories/{id}",
-            "POST /pipeline/stories/{id}/generate",
-            "POST /pipeline/characters",
-            "GET  /pipeline/characters/story/{story_id}",
-            "GET  /pipeline/characters/{id}",
-            "GET  /pipeline/episodes/story/{story_id}",
-            "GET  /pipeline/episodes/{id}",
-            "GET  /pipeline/jobs/{id}",
-            "GET  /pipeline/jobs/entity/{type}/{entity_id}",
+        "version": "2.0.0",
+        "features": [
+            "workflow_types: creator_series|brand_campaign|social_short|educational|game_lore",
+            "approval_gates: outline, characters, scenes",
+            "granular_regeneration: per-scene, per-character-refs",
+            "brand_bibles: brand|character|world|campaign memory",
         ],
+        "endpoints": {
+            "stories": [
+                "POST   /pipeline/stories",
+                "GET    /pipeline/stories",
+                "GET    /pipeline/stories/{id}",
+                "PUT    /pipeline/stories/{id}/approve-outline",
+                "POST   /pipeline/stories/{id}/generate",
+            ],
+            "bibles": [
+                "POST   /pipeline/bibles",
+                "GET    /pipeline/bibles/story/{story_id}",
+                "GET    /pipeline/bibles/{id}",
+                "PUT    /pipeline/bibles/{id}",
+                "DELETE /pipeline/bibles/{id}",
+            ],
+            "characters": [
+                "POST   /pipeline/characters",
+                "GET    /pipeline/characters/story/{story_id}",
+                "GET    /pipeline/characters/{id}",
+                "PUT    /pipeline/characters/{id}/approve",
+                "PUT    /pipeline/characters/{id}/lock",
+                "POST   /pipeline/characters/{id}/regenerate-refs",
+            ],
+            "scenes": [
+                "GET    /pipeline/scenes/{id}",
+                "PUT    /pipeline/scenes/{id}/approve",
+                "PUT    /pipeline/scenes/{id}/reject",
+                "PUT    /pipeline/scenes/{id}/lock",
+                "POST   /pipeline/scenes/{id}/regenerate",
+            ],
+            "episodes": [
+                "GET    /pipeline/episodes/story/{story_id}",
+                "GET    /pipeline/episodes/{id}",
+            ],
+            "jobs": [
+                "GET    /pipeline/jobs/{id}",
+                "GET    /pipeline/jobs/entity/{type}/{entity_id}",
+            ],
+        },
     }
