@@ -1,0 +1,20 @@
+High-Priority Gaps
+                                                                                                                                                 
+  1. Qwen Cloud proof is weak                                                                                                                    
+     The hackathon requires Qwen models available on Qwen Cloud and proof of Alibaba Cloud deployment. Your code currently uses AIML API:        
+     /C:/Users/ASUS FX95G/Documents/apps/qwenvideo/artifacts/pipeline/src/pipeline/story_agent.py:7 and /C:/Users/ASUS FX95G/Documents/apps/     
+     qwenvideo/artifacts/pipeline/src/pipeline/scene_gen.py:11.                                                                                  
+     Docs mention DASHSCOPE_API_KEY, but code expects AIML_API_KEY: /C:/Users/ASUS FX95G/Documents/apps/qwenvideo/replit.md:14, /C:/Users/ASUS   
+     FX95G/Documents/apps/qwenvideo/artifacts/pipeline/src/pipeline/story_agent.py:19.
+                                                                                                                                                 
+  2. Characters are planned but not automatically materialized                                                                                   
+     create_story generates a plan with characters, but does not insert those characters into the characters table. The orchestrator later loads 
+     characters from DB and may find none:                                                                                                       
+     /C:/Users/ASUS FX95G/Documents/apps/qwenvideo/artifacts/pipeline/src/routes/stories.py:22, /C:/Users/ASUS FX95G/Documents/apps/qwenvideo/   
+     artifacts/pipeline/src/pipeline/orchestrator.py:51.                                                                                         
+     This undercuts the “consistent character” claim unless users manually create characters.                                                    
+
+  3. Frontend/backend response mismatch can hide successful output                                                                               
+     Backend story status becomes ready, but frontend expects completed: /C:/Users/ASUS FX95G/Documents/apps/qwenvideo/artifacts/pipeline/src/   
+     models/story.py:10, /C:/Users/ASUS FX95G/Documents/apps/qwenvideo/artifacts/app/src/lib/api.ts:7.                                           
+     Backend scenes return clip_url, but frontend displays scene.video_url: /C:/Users/ASUS FX95G/Documents/apps/qwenvideo/artifacts/pipeline/src/     routes/episodes.py:63, /C:/Users/ASUS FX95G/Documents/apps/qwenvideo/artifacts/app/src/pages/story-detail.tsx:220.     
