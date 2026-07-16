@@ -1,10 +1,12 @@
 import { Link, useLocation } from "wouter";
-import { Menu, Sparkles } from "lucide-react";
+import { Menu, Sparkles, LogOut, UserCircle2 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "./ui/sheet";
+import { useAuth } from "@/lib/auth";
 
 export function Layout({ children }: { children: React.ReactNode }) {
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
+  const { user, logout } = useAuth();
 
   return (
     <div className="min-h-screen bg-white text-gray-900 flex flex-col font-sans">
@@ -20,19 +22,26 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <nav className="hidden md:flex items-center gap-6 text-sm ml-2">
             {[
               { href: "/dashboard", label: "Dashboard" },
-              { href: "/pricing",   label: "Pricing" },
-            ].map(n => (
-              <Link key={n.href} href={n.href}
+              { href: "/pricing", label: "Pricing" },
+            ].map((n) => (
+              <Link
+                key={n.href}
+                href={n.href}
                 className={`transition-colors font-medium ${
                   location.startsWith(n.href)
                     ? "text-violet-600"
                     : "text-gray-500 hover:text-gray-900"
-                }`}>
+                }`}
+              >
                 {n.label}
               </Link>
             ))}
-            <a href="https://qwencloud.com" target="_blank" rel="noopener noreferrer"
-               className="text-gray-500 hover:text-gray-900 transition-colors font-medium">
+            <a
+              href="https://qwencloud.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-gray-500 hover:text-gray-900 transition-colors font-medium"
+            >
               Powered by Qwen
             </a>
           </nav>
@@ -40,11 +49,31 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <div className="flex-1" />
 
           <div className="hidden md:flex items-center gap-3">
-            <Link href="/dashboard">
-              <Button size="sm" className="bg-gray-900 hover:bg-gray-700 text-white font-medium px-4 rounded-lg text-sm">
-                Get Started
-              </Button>
-            </Link>
+            {user ? (
+              <>
+                <div className="flex items-center gap-2 text-sm text-gray-500">
+                  <UserCircle2 className="h-4 w-4" />
+                  <span>{user.email}</span>
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-gray-600 hover:text-gray-900"
+                  onClick={async () => {
+                    await logout();
+                    setLocation("/");
+                  }}
+                >
+                  <LogOut className="mr-2 h-4 w-4" /> Sign out
+                </Button>
+              </>
+            ) : (
+              <Link href="/login">
+                <Button size="sm" className="bg-gray-900 hover:bg-gray-700 text-white font-medium px-4 rounded-lg text-sm">
+                  Sign in
+                </Button>
+              </Link>
+            )}
           </div>
 
           <Sheet>
@@ -63,6 +92,19 @@ export function Layout({ children }: { children: React.ReactNode }) {
               <div className="flex flex-col gap-4 text-sm">
                 <Link href="/dashboard" className="text-gray-700 hover:text-gray-900 font-medium">Dashboard</Link>
                 <Link href="/pricing" className="text-gray-700 hover:text-gray-900 font-medium">Pricing</Link>
+                {user ? (
+                  <button
+                    className="text-left text-gray-700 hover:text-gray-900 font-medium"
+                    onClick={async () => {
+                      await logout();
+                      setLocation("/");
+                    }}
+                  >
+                    Sign out
+                  </button>
+                ) : (
+                  <Link href="/login" className="text-gray-700 hover:text-gray-900 font-medium">Sign in</Link>
+                )}
               </div>
             </SheetContent>
           </Sheet>
@@ -79,7 +121,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </div>
             <span className="font-medium text-gray-500">StoryForge</span>
           </div>
-          <span>AI Showrunner Â· Qwen Cloud Â· Wan 2.7 Â· Backblaze B2 Â· CockroachDB</span>
+          <span>AI Showrunner · Qwen Cloud · Wan 2.7 · Backblaze B2 · CockroachDB</span>
           <nav className="flex gap-4">
             <Link href="/pricing" className="hover:text-gray-600 transition-colors">Pricing</Link>
             <Link href="/dashboard" className="hover:text-gray-600 transition-colors">Dashboard</Link>

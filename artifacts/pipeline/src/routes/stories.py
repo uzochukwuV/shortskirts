@@ -1,10 +1,10 @@
 import json
-from datetime import datetime
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from db.connection import get_pool
-from models.story import StoryCreate, StoryResponse, GenerationJobResponse, StoryStatus
+from models.story import StoryCreate, StoryResponse, GenerationJobResponse
 from pipeline.story_agent import generate_episode_plan
 from pipeline.orchestrator import run_story_generation
+from auth import get_current_user, user_id
 
 router = APIRouter(prefix="/pipeline/stories", tags=["stories"])
 
@@ -28,14 +28,16 @@ def _build_story_response(row, plan_data) -> StoryResponse:
 
 
 @router.post("", response_model=StoryResponse)
-async def create_story(body: StoryCreate):
+async def create_story(body: StoryCreate, user=Depends(get_current_user)):
     pool = await get_pool()
+    owner_id = user_id(user)
 
-    # Load bibles if provided — inject into LLM planning prompt
     bibles = []
     if body.bible_ids:
         rows = await pool.fetch(
-            "SELECT * FROM bibles WHERE id = ANY($1::uuid[])", body.bible_ids
+            "SELECT * FROM bibles WHERE id = ANY($1::uuid[]) AND owner_id=$2",
+            body.bible_ids,
+            owner_id,
         )
         for r in rows:
             content = r["content"]
@@ -59,73 +61,87 @@ async def create_story(body: StoryCreate):
 
     row = await pool.fetchrow(
         """INSERT INTO stories
-           (title, prompt, genre, style, num_episodes, num_scenes, status,
+           (owner_id, title, prompt, genre, style, num_episodes, num_scenes, status,
             workflow_type, approval_status, episode_plan)
-           VALUES ($1,$2,$3,$4,$5,$6,'draft',$7,'pending_approval',$8::jsonb)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,'pending_approval',$9::jsonb)
            RETURNING *""",
-        body.title, body.prompt, body.genre, body.style,
-        body.num_episodes, body.num_scenes,
-        body.workflow_type.value, json.dumps(plan),
+        owner_id,
+        body.title,
+        body.prompt,
+        body.genre,
+        body.style,
+        body.num_episodes,
+        body.num_scenes,
+        body.workflow_type.value,
+        json.dumps(plan),
     )
     story_id = str(row["id"])
 
-    # Link bibles to this story
     if body.bible_ids:
         for bid in body.bible_ids:
             await pool.execute(
-                "UPDATE bibles SET story_id=$1 WHERE id=$2 AND story_id IS NULL",
-                story_id, bid,
+                """UPDATE bibles SET story_id=$1, updated_at=now()
+                   WHERE id=$2 AND story_id IS NULL AND owner_id=$3""",
+                story_id,
+                bid,
+                owner_id,
             )
 
-    # Auto-materialize characters from plan
     plan_characters = plan.get("characters", [])
     if plan_characters:
         await _insert_plan_characters(pool, story_id, plan_characters)
 
-    # Pre-insert episode rows
     for ep in plan.get("episodes", []):
         await pool.execute(
             """INSERT INTO episodes (story_id, episode_number, title, status)
                VALUES ($1,$2,$3,'pending')
                ON CONFLICT (story_id, episode_number) DO NOTHING""",
-            story_id, ep["episode_number"],
+            story_id,
+            ep["episode_number"],
             ep.get("title", f"Episode {ep['episode_number']}"),
         )
 
     plan_data = row["episode_plan"]
     if isinstance(plan_data, str):
         plan_data = json.loads(plan_data)
-
     return _build_story_response(row, plan_data)
 
 
 async def _insert_plan_characters(pool, story_id: str, characters: list[dict]):
+    inserted = 0
+    skipped = 0
     for char in characters:
         name = char.get("name", "").strip()
         if not name:
+            skipped += 1
             continue
-        exists = await pool.fetchval(
-            "SELECT id FROM characters WHERE story_id=$1 AND name=$2", story_id, name
-        )
-        if exists:
-            continue
-        await pool.execute(
+        row = await pool.fetchrow(
             """INSERT INTO characters
                (story_id, name, description, role, personality, appearance, ref_image_urls)
-               VALUES ($1,$2,$3,$4,$5,$6,'[]'::jsonb)""",
-            story_id, name,
+               VALUES ($1,$2,$3,$4,$5,$6,'[]'::jsonb)
+               ON CONFLICT (story_id, name) DO NOTHING
+               RETURNING id""",
+            story_id,
+            name,
             char.get("description", ""),
             char.get("role", "main"),
             char.get("personality", ""),
             char.get("appearance", ""),
         )
-    print(f"[stories] Materialised {len(characters)} characters for story {story_id}")
+        if row:
+            inserted += 1
+        else:
+            skipped += 1
+    print(f"[stories] Materialised {inserted} characters for story {story_id}; skipped {skipped}")
 
 
 @router.get("", response_model=list[StoryResponse])
-async def list_stories():
+async def list_stories(user=Depends(get_current_user)):
     pool = await get_pool()
-    rows = await pool.fetch("SELECT * FROM stories ORDER BY created_at DESC LIMIT 50")
+    rows = await pool.fetch(
+        "SELECT * FROM stories WHERE owner_id=$1 ORDER BY created_at DESC LIMIT 50",
+        user_id(user),
+    )
     result = []
     for row in rows:
         plan_data = row["episode_plan"]
@@ -136,9 +152,13 @@ async def list_stories():
 
 
 @router.get("/{story_id}", response_model=StoryResponse)
-async def get_story(story_id: str):
+async def get_story(story_id: str, user=Depends(get_current_user)):
     pool = await get_pool()
-    row = await pool.fetchrow("SELECT * FROM stories WHERE id=$1", story_id)
+    row = await pool.fetchrow(
+        "SELECT * FROM stories WHERE id=$1 AND owner_id=$2",
+        story_id,
+        user_id(user),
+    )
     if not row:
         raise HTTPException(status_code=404, detail="Story not found")
     plan_data = row["episode_plan"]
@@ -147,50 +167,45 @@ async def get_story(story_id: str):
     return _build_story_response(row, plan_data)
 
 
-# ── Approval gate: approve the outline before any video renders ──────────────
-
 @router.put("/{story_id}/approve-outline", response_model=StoryResponse)
-async def approve_outline(story_id: str):
-    """Human gate: approve the story outline. Required before generation can start."""
+async def approve_outline(story_id: str, user=Depends(get_current_user)):
     pool = await get_pool()
-    story = await pool.fetchrow("SELECT * FROM stories WHERE id=$1", story_id)
-    if not story:
-        raise HTTPException(status_code=404, detail="Story not found")
-    if story["status"] not in ("draft",):
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot approve outline in status '{story['status']}'"
-        )
-
     row = await pool.fetchrow(
         """UPDATE stories
            SET status='approved', approval_status='approved', approved_at=now(), updated_at=now()
-           WHERE id=$1 RETURNING *""",
+           WHERE id=$1 AND owner_id=$2 AND status='draft'
+           RETURNING *""",
         story_id,
+        user_id(user),
     )
+    if not row:
+        raise HTTPException(status_code=404, detail="Draft story not found")
     plan_data = row["episode_plan"]
     if isinstance(plan_data, str):
         plan_data = json.loads(plan_data)
     return _build_story_response(row, plan_data)
 
 
-# ── Start generation (requires approved outline) ─────────────────────────────
-
 @router.post("/{story_id}/generate", response_model=GenerationJobResponse)
-async def generate_story(story_id: str, background_tasks: BackgroundTasks):
+async def generate_story(
+    story_id: str,
+    background_tasks: BackgroundTasks,
+    user=Depends(get_current_user),
+):
     pool = await get_pool()
-    story = await pool.fetchrow("SELECT * FROM stories WHERE id=$1", story_id)
+    story = await pool.fetchrow(
+        "SELECT * FROM stories WHERE id=$1 AND owner_id=$2",
+        story_id,
+        user_id(user),
+    )
     if not story:
         raise HTTPException(status_code=404, detail="Story not found")
-
     if story["status"] == "generating":
         raise HTTPException(status_code=409, detail="Generation already in progress")
-
-    # Enforce approval gate — outline must be approved first
     if story["status"] == "draft":
         raise HTTPException(
             status_code=400,
-            detail="Outline must be approved before generation. Call PUT /approve-outline first."
+            detail="Outline must be approved before generation. Call PUT /approve-outline first.",
         )
 
     job_row = await pool.fetchrow(
@@ -201,7 +216,10 @@ async def generate_story(story_id: str, background_tasks: BackgroundTasks):
         story_id,
     )
     job_id = str(job_row["id"])
-    await pool.execute("UPDATE stories SET status='generating', updated_at=now() WHERE id=$1", story_id)
+    await pool.execute(
+        "UPDATE stories SET status='generating', updated_at=now() WHERE id=$1",
+        story_id,
+    )
     background_tasks.add_task(run_story_generation, story_id, job_id)
 
     return GenerationJobResponse(

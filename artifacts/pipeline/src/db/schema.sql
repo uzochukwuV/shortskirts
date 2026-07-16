@@ -1,6 +1,28 @@
 -- StoryForge Anime - CockroachDB Schema
 -- All statements are idempotent (IF NOT EXISTS / IF NOT EXISTS guards)
 
+
+-- Auth -----------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at ON auth_sessions(expires_at);
+
 -- ── Stories ──────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS stories (
@@ -18,6 +40,7 @@ CREATE TABLE IF NOT EXISTS stories (
 );
 
 -- New columns on stories (safe to re-run)
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS owner_id UUID REFERENCES users(id) ON DELETE CASCADE;
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS workflow_type TEXT NOT NULL DEFAULT 'creator_series';
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS approval_status TEXT NOT NULL DEFAULT 'pending_approval';
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
@@ -27,6 +50,7 @@ ALTER TABLE stories ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS bibles (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    owner_id UUID REFERENCES users(id) ON DELETE CASCADE,
     story_id UUID REFERENCES stories(id) ON DELETE CASCADE,
     bible_type TEXT NOT NULL DEFAULT 'brand',
     name TEXT NOT NULL,
@@ -35,6 +59,8 @@ CREATE TABLE IF NOT EXISTS bibles (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE bibles ADD COLUMN IF NOT EXISTS owner_id UUID REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_bibles_owner_id ON bibles(owner_id);
 CREATE INDEX IF NOT EXISTS idx_bibles_story_id ON bibles(story_id);
 
 -- ── Characters ────────────────────────────────────────────────────────────────
@@ -59,6 +85,7 @@ ALTER TABLE characters ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
 ALTER TABLE characters ADD COLUMN IF NOT EXISTS locked BOOLEAN NOT NULL DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS idx_characters_story_id ON characters(story_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_characters_story_name ON characters(story_id, name);
 
 -- ── Episodes ──────────────────────────────────────────────────────────────────
 
@@ -75,6 +102,7 @@ CREATE TABLE IF NOT EXISTS episodes (
     UNIQUE(story_id, episode_number)
 );
 
+CREATE INDEX IF NOT EXISTS idx_stories_owner_id ON stories(owner_id);
 CREATE INDEX IF NOT EXISTS idx_episodes_story_id ON episodes(story_id);
 
 -- ── Scenes ────────────────────────────────────────────────────────────────────

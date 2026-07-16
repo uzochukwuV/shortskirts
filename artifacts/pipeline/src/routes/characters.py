@@ -1,9 +1,10 @@
 import json
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from db.connection import get_pool
 from models.story import CharacterCreate, CharacterResponse, GenerationJobResponse
 from pipeline.character_gen import generate_character_references, get_character_embedding
+from auth import get_current_user, user_id
 
 router = APIRouter(prefix="/pipeline/characters", tags=["characters"])
 
@@ -27,26 +28,58 @@ def _row_to_response(row) -> CharacterResponse:
     )
 
 
-# ── Create character + trigger ref generation in background ──────────────────
+async def _get_character_for_owner(pool, character_id: str, owner_id: str):
+    return await pool.fetchrow(
+        """SELECT c.* FROM characters c
+           JOIN stories s ON s.id = c.story_id
+           WHERE c.id=$1 AND s.owner_id=$2""",
+        character_id,
+        owner_id,
+    )
+
 
 @router.post("", response_model=CharacterResponse)
-async def create_character(body: CharacterCreate, background_tasks: BackgroundTasks):
+async def create_character(
+    body: CharacterCreate,
+    background_tasks: BackgroundTasks,
+    user=Depends(get_current_user),
+):
     pool = await get_pool()
-    story = await pool.fetchrow("SELECT * FROM stories WHERE id=$1", body.story_id)
+    owner_id = user_id(user)
+    story = await pool.fetchrow(
+        "SELECT * FROM stories WHERE id=$1 AND owner_id=$2",
+        body.story_id,
+        owner_id,
+    )
     if not story:
         raise HTTPException(status_code=404, detail="Story not found")
 
     row = await pool.fetchrow(
         """INSERT INTO characters
            (story_id, name, description, role, personality, appearance)
-           VALUES ($1,$2,$3,$4,$5,$6) RETURNING *""",
-        body.story_id, body.name, body.description, body.role,
-        body.personality, body.appearance,
+           VALUES ($1,$2,$3,$4,$5,$6)
+           ON CONFLICT (story_id, name) DO UPDATE SET
+             description=excluded.description,
+             role=excluded.role,
+             personality=excluded.personality,
+             appearance=excluded.appearance,
+             updated_at=now()
+           RETURNING *""",
+        body.story_id,
+        body.name,
+        body.description,
+        body.role,
+        body.personality,
+        body.appearance,
     )
     character_id = str(row["id"])
-    char_dict = {"name": body.name, "description": body.description, "role": body.role,
-                 "personality": body.personality, "appearance": body.appearance}
-
+    char_dict = {
+        "name": body.name,
+        "description": body.description,
+        "role": body.role,
+        "personality": body.personality,
+        "appearance": body.appearance,
+    }
     background_tasks.add_task(_generate_refs_bg, body.story_id, character_id, char_dict, story["style"])
     return _row_to_response(row)
 
@@ -59,75 +92,75 @@ async def _generate_refs_bg(story_id: str, character_id: str, character: dict, s
         await pool.execute(
             """UPDATE characters SET ref_image_urls=$1::jsonb, embedding=$2::jsonb, updated_at=now()
                WHERE id=$3""",
-            json.dumps(urls), json.dumps(embedding), character_id,
+            json.dumps(urls),
+            json.dumps(embedding),
+            character_id,
         )
     except Exception as e:
         print(f"[characters] Ref generation failed: {e}")
 
 
-# ── List characters ───────────────────────────────────────────────────────────
-
 @router.get("/story/{story_id}", response_model=list[CharacterResponse])
-async def list_characters(story_id: str):
+async def list_characters(story_id: str, user=Depends(get_current_user)):
     pool = await get_pool()
     rows = await pool.fetch(
-        "SELECT * FROM characters WHERE story_id=$1 ORDER BY created_at ASC", story_id
+        """SELECT c.* FROM characters c
+           JOIN stories s ON s.id = c.story_id
+           WHERE c.story_id=$1 AND s.owner_id=$2
+           ORDER BY c.created_at ASC""",
+        story_id,
+        user_id(user),
     )
     return [_row_to_response(r) for r in rows]
 
 
 @router.get("/{character_id}", response_model=CharacterResponse)
-async def get_character(character_id: str):
+async def get_character(character_id: str, user=Depends(get_current_user)):
     pool = await get_pool()
-    row = await pool.fetchrow("SELECT * FROM characters WHERE id=$1", character_id)
+    row = await _get_character_for_owner(pool, character_id, user_id(user))
     if not row:
         raise HTTPException(status_code=404, detail="Character not found")
     return _row_to_response(row)
 
 
-# ── Approve character (approve ref images before scene generation) ────────────
-
 @router.put("/{character_id}/approve", response_model=CharacterResponse)
-async def approve_character(character_id: str):
-    """Human gate: approve character reference images."""
+async def approve_character(character_id: str, user=Depends(get_current_user)):
     pool = await get_pool()
+    if not await _get_character_for_owner(pool, character_id, user_id(user)):
+        raise HTTPException(status_code=404, detail="Character not found")
     row = await pool.fetchrow(
         """UPDATE characters
            SET approval_status='approved', approved_at=now(), updated_at=now()
            WHERE id=$1 RETURNING *""",
         character_id,
     )
-    if not row:
-        raise HTTPException(status_code=404, detail="Character not found")
     return _row_to_response(row)
 
 
-# ── Lock character (prevent further ref regeneration) ────────────────────────
-
 @router.put("/{character_id}/lock", response_model=CharacterResponse)
-async def lock_character(character_id: str):
+async def lock_character(character_id: str, user=Depends(get_current_user)):
     pool = await get_pool()
+    if not await _get_character_for_owner(pool, character_id, user_id(user)):
+        raise HTTPException(status_code=404, detail="Character not found")
     row = await pool.fetchrow(
         "UPDATE characters SET locked=true, updated_at=now() WHERE id=$1 RETURNING *",
         character_id,
     )
-    if not row:
-        raise HTTPException(status_code=404, detail="Character not found")
     return _row_to_response(row)
 
 
-# ── Regenerate character ref images ──────────────────────────────────────────
-
 @router.post("/{character_id}/regenerate-refs", response_model=GenerationJobResponse)
-async def regenerate_character_refs(character_id: str, background_tasks: BackgroundTasks):
-    """Regenerate reference images for a single character without rerunning the pipeline."""
+async def regenerate_character_refs(
+    character_id: str,
+    background_tasks: BackgroundTasks,
+    user=Depends(get_current_user),
+):
     pool = await get_pool()
-
-    char = await pool.fetchrow("SELECT * FROM characters WHERE id=$1", character_id)
+    char = await _get_character_for_owner(pool, character_id, user_id(user))
     if not char:
         raise HTTPException(status_code=404, detail="Character not found")
     if char.get("locked"):
-        raise HTTPException(status_code=409, detail="Character is locked — unlock before regenerating")
+        raise HTTPException(status_code=409, detail="Character is locked; unlock before regenerating")
 
     story = await pool.fetchrow("SELECT * FROM stories WHERE id=$1", str(char["story_id"]))
     if not story:
@@ -143,13 +176,19 @@ async def regenerate_character_refs(character_id: str, background_tasks: Backgro
     job_id = str(job_row["id"])
 
     char_dict = {
-        "name": char["name"], "description": char["description"],
-        "role": char["role"], "personality": char["personality"],
+        "name": char["name"],
+        "description": char["description"],
+        "role": char["role"],
+        "personality": char["personality"],
         "appearance": char["appearance"],
     }
     background_tasks.add_task(
-        _regen_refs_bg, character_id, str(char["story_id"]), char_dict,
-        story["style"], job_id,
+        _regen_refs_bg,
+        character_id,
+        str(char["story_id"]),
+        char_dict,
+        story["style"],
+        job_id,
     )
 
     return GenerationJobResponse(
@@ -165,10 +204,7 @@ async def regenerate_character_refs(character_id: str, background_tasks: Backgro
     )
 
 
-async def _regen_refs_bg(
-    character_id: str, story_id: str,
-    char_dict: dict, style: str, job_id: str,
-):
+async def _regen_refs_bg(character_id: str, story_id: str, char_dict: dict, style: str, job_id: str):
     pool = await get_pool()
 
     async def _upd(**kw):
@@ -182,32 +218,34 @@ async def _regen_refs_bg(
                 vals.append(v)
         vals.append(job_id)
         await pool.execute(
-            f"UPDATE generation_jobs SET {','.join(fields)} WHERE id=${len(vals)}", *vals,
+            f"UPDATE generation_jobs SET {','.join(fields)} WHERE id=${len(vals)}",
+            *vals,
         )
 
     try:
         await _upd(status="running", started_at=datetime.utcnow(), current_step="Generating new ref images")
-
         urls = await generate_character_references(story_id, character_id, char_dict, style)
         embedding = get_character_embedding(char_dict)
-
         await pool.execute(
             """UPDATE characters
                SET ref_image_urls=$1::jsonb, embedding=$2::jsonb,
                    approval_status='pending', updated_at=now()
                WHERE id=$3""",
-            json.dumps(urls), json.dumps(embedding), character_id,
+            json.dumps(urls),
+            json.dumps(embedding),
+            character_id,
         )
-
         await _upd(
-            status="completed", progress=1, current_step="Done",
+            status="completed",
+            progress=1,
+            current_step="Done",
             completed_at=datetime.utcnow(),
             result={"character_id": character_id, "ref_count": len(urls)},
         )
-
     except Exception as e:
         print(f"[characters] Regen refs failed: {e}")
         await _upd(
-            status="failed", current_step=f"Failed: {str(e)[:200]}",
+            status="failed",
+            current_step=f"Failed: {str(e)[:200]}",
             completed_at=datetime.utcnow(),
         )

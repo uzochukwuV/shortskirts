@@ -1,5 +1,3 @@
-// ─── Entity types ──────────────────────────────────────────────────────────────
-
 export type WorkflowType =
   | "creator_series"
   | "brand_campaign"
@@ -72,7 +70,7 @@ export type Scene = {
   scene_number: number;
   prompt: string;
   clip_url?: string;
-  video_url?: string;       // computed alias for clip_url from backend
+  video_url?: string;
   exit_frame_url?: string;
   duration?: number;
   status: string;
@@ -84,6 +82,17 @@ export type Scene = {
   visual_prompt?: string;
   mood?: string;
   location?: string;
+};
+
+export type User = {
+  id: string;
+  email: string;
+  created_at: string;
+};
+
+export type AuthResponse = {
+  token: string;
+  user: User;
 };
 
 export type GenerationJob = {
@@ -102,12 +111,29 @@ export type GenerationJob = {
   created_at: string;
 };
 
-// ─── HTTP helper ───────────────────────────────────────────────────────────────
-
 const BASE = "/pipeline";
+const AUTH_TOKEN_KEY = "storyforge_auth_token";
+
+export function getAuthToken() {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(AUTH_TOKEN_KEY);
+}
+
+export function setAuthToken(token: string) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(AUTH_TOKEN_KEY, token);
+}
+
+export function clearAuthToken() {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(AUTH_TOKEN_KEY);
+}
 
 async function req<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, options);
+  const headers = new Headers(options?.headers);
+  const token = getAuthToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const res = await fetch(url, { ...options, headers });
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
     throw new Error(`API ${res.status}: ${text}`);
@@ -127,10 +153,14 @@ const put = (body: unknown = {}) => ({
   body: JSON.stringify(body),
 });
 
-// ─── API surface ───────────────────────────────────────────────────────────────
-
 export const api = {
-  // Stories
+  register: (data: { email: string; password: string }) =>
+    req<AuthResponse>(`${BASE}/auth/register`, json(data)),
+  login: (data: { email: string; password: string }) =>
+    req<AuthResponse>(`${BASE}/auth/login`, json(data)),
+  me: () => req<User>(`${BASE}/auth/me`),
+  logout: () => req<{ ok: boolean }>(`${BASE}/auth/logout`, { method: "POST" }),
+
   getStories: () => req<Story[]>(`${BASE}/stories`),
   getStory: (id: string) => req<Story>(`${BASE}/stories/${id}`),
   createStory: (data: {
@@ -143,42 +173,25 @@ export const api = {
     workflow_type?: WorkflowType;
     bible_ids?: string[];
   }) => req<Story>(`${BASE}/stories`, json(data)),
+  approveOutline: (id: string) => req<Story>(`${BASE}/stories/${id}/approve-outline`, put()),
+  generateStory: (id: string) => req<GenerationJob>(`${BASE}/stories/${id}/generate`, { method: "POST", body: "{}" }),
 
-  /** Approve the outline — required before generation can start */
-  approveOutline: (id: string) =>
-    req<Story>(`${BASE}/stories/${id}/approve-outline`, put()),
-
-  /** Kick off full pipeline generation (requires approved outline) */
-  generateStory: (id: string) =>
-    req<GenerationJob>(`${BASE}/stories/${id}/generate`, {
-      method: "POST", body: "{}",
-    }),
-
-  // Bibles (brand / character / world / campaign memory)
   getBibles: (storyId: string) => req<Bible[]>(`${BASE}/bibles/story/${storyId}`),
   createBible: (data: Partial<Bible>) => req<Bible>(`${BASE}/bibles`, json(data)),
   updateBible: (id: string, data: Partial<Bible>) => req<Bible>(`${BASE}/bibles/${id}`, { ...put(data), method: "PUT" }),
   deleteBible: (id: string) => req<{ deleted: string }>(`${BASE}/bibles/${id}`, { method: "DELETE" }),
 
-  // Characters
   getCharacters: (storyId: string) => req<Character[]>(`${BASE}/characters/story/${storyId}`),
   approveCharacter: (id: string) => req<Character>(`${BASE}/characters/${id}/approve`, put()),
   lockCharacter: (id: string) => req<Character>(`${BASE}/characters/${id}/lock`, put()),
-  regenerateCharacterRefs: (id: string) =>
-    req<GenerationJob>(`${BASE}/characters/${id}/regenerate-refs`, json({})),
+  regenerateCharacterRefs: (id: string) => req<GenerationJob>(`${BASE}/characters/${id}/regenerate-refs`, json({})),
 
-  // Scenes
   approveScene: (id: string) => req<Scene>(`${BASE}/scenes/${id}/approve`, put()),
   rejectScene: (id: string) => req<Scene>(`${BASE}/scenes/${id}/reject`, put()),
   lockScene: (id: string) => req<Scene>(`${BASE}/scenes/${id}/lock`, put()),
-  regenerateScene: (id: string) =>
-    req<GenerationJob>(`${BASE}/scenes/${id}/regenerate`, json({})),
+  regenerateScene: (id: string) => req<GenerationJob>(`${BASE}/scenes/${id}/regenerate`, json({})),
 
-  // Episodes
   getEpisodes: (storyId: string) => req<Episode[]>(`${BASE}/episodes/story/${storyId}`),
-
-  // Jobs
   getJob: (jobId: string) => req<GenerationJob>(`${BASE}/jobs/${jobId}`),
-  getEntityJobs: (type: string, id: string) =>
-    req<GenerationJob[]>(`${BASE}/jobs/entity/${type}/${id}`),
+  getEntityJobs: (type: string, id: string) => req<GenerationJob[]>(`${BASE}/jobs/entity/${type}/${id}`),
 };

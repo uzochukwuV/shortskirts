@@ -1,14 +1,8 @@
-"""
-Bible routes — persistent brand/character/world/campaign memory.
-
-Each bible is attached to a story and injected into the LLM prompt at plan-generation time,
-ensuring every scene respects the brand's rules, character designs, and visual motifs.
-"""
 import json
-from datetime import datetime
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from db.connection import get_pool
 from models.story import BibleCreate, BibleResponse
+from auth import get_current_user, user_id
 
 router = APIRouter(prefix="/pipeline/bibles", tags=["bibles"])
 
@@ -29,49 +23,82 @@ def _row_to_response(row) -> BibleResponse:
 
 
 @router.post("", response_model=BibleResponse)
-async def create_bible(body: BibleCreate):
+async def create_bible(body: BibleCreate, user=Depends(get_current_user)):
     pool = await get_pool()
+    owner_id = user_id(user)
 
     if body.story_id:
-        story = await pool.fetchrow("SELECT id FROM stories WHERE id=$1", body.story_id)
+        story = await pool.fetchrow(
+            "SELECT id FROM stories WHERE id=$1 AND owner_id=$2",
+            body.story_id,
+            owner_id,
+        )
         if not story:
             raise HTTPException(status_code=404, detail="Story not found")
 
     row = await pool.fetchrow(
-        """INSERT INTO bibles (story_id, bible_type, name, content)
-           VALUES ($1, $2, $3, $4::jsonb)
+        """INSERT INTO bibles (owner_id, story_id, bible_type, name, content)
+           VALUES ($1, $2, $3, $4, $5::jsonb)
            RETURNING *""",
-        body.story_id, body.bible_type.value, body.name, json.dumps(body.content),
+        owner_id,
+        body.story_id,
+        body.bible_type.value,
+        body.name,
+        json.dumps(body.content),
     )
     return _row_to_response(row)
 
 
 @router.get("/story/{story_id}", response_model=list[BibleResponse])
-async def list_story_bibles(story_id: str):
+async def list_story_bibles(story_id: str, user=Depends(get_current_user)):
     pool = await get_pool()
     rows = await pool.fetch(
-        "SELECT * FROM bibles WHERE story_id=$1 ORDER BY created_at ASC", story_id
+        """SELECT b.* FROM bibles b
+           JOIN stories s ON s.id = b.story_id
+           WHERE b.story_id=$1 AND s.owner_id=$2
+           ORDER BY b.created_at ASC""",
+        story_id,
+        user_id(user),
     )
     return [_row_to_response(r) for r in rows]
 
 
 @router.get("/{bible_id}", response_model=BibleResponse)
-async def get_bible(bible_id: str):
+async def get_bible(bible_id: str, user=Depends(get_current_user)):
     pool = await get_pool()
-    row = await pool.fetchrow("SELECT * FROM bibles WHERE id=$1", bible_id)
+    row = await pool.fetchrow(
+        "SELECT * FROM bibles WHERE id=$1 AND owner_id=$2",
+        bible_id,
+        user_id(user),
+    )
     if not row:
         raise HTTPException(status_code=404, detail="Bible not found")
     return _row_to_response(row)
 
 
 @router.put("/{bible_id}", response_model=BibleResponse)
-async def update_bible(bible_id: str, body: BibleCreate):
+async def update_bible(bible_id: str, body: BibleCreate, user=Depends(get_current_user)):
     pool = await get_pool()
+    owner_id = user_id(user)
+    if body.story_id:
+        story = await pool.fetchrow(
+            "SELECT id FROM stories WHERE id=$1 AND owner_id=$2",
+            body.story_id,
+            owner_id,
+        )
+        if not story:
+            raise HTTPException(status_code=404, detail="Story not found")
+
     row = await pool.fetchrow(
         """UPDATE bibles
-           SET name=$1, content=$2::jsonb, bible_type=$3, updated_at=now()
-           WHERE id=$4 RETURNING *""",
-        body.name, json.dumps(body.content), body.bible_type.value, bible_id,
+           SET story_id=$1, name=$2, content=$3::jsonb, bible_type=$4, updated_at=now()
+           WHERE id=$5 AND owner_id=$6 RETURNING *""",
+        body.story_id,
+        body.name,
+        json.dumps(body.content),
+        body.bible_type.value,
+        bible_id,
+        owner_id,
     )
     if not row:
         raise HTTPException(status_code=404, detail="Bible not found")
@@ -79,9 +106,13 @@ async def update_bible(bible_id: str, body: BibleCreate):
 
 
 @router.delete("/{bible_id}")
-async def delete_bible(bible_id: str):
+async def delete_bible(bible_id: str, user=Depends(get_current_user)):
     pool = await get_pool()
-    result = await pool.execute("DELETE FROM bibles WHERE id=$1", bible_id)
+    result = await pool.execute(
+        "DELETE FROM bibles WHERE id=$1 AND owner_id=$2",
+        bible_id,
+        user_id(user),
+    )
     if result == "DELETE 0":
         raise HTTPException(status_code=404, detail="Bible not found")
     return {"deleted": bible_id}

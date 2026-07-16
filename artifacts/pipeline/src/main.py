@@ -10,6 +10,7 @@ from routes.episodes   import router as episodes_router
 from routes.scenes     import router as scenes_router
 from routes.bibles     import router as bibles_router
 from routes.jobs       import router as jobs_router
+from auth              import router as auth_router
 
 
 @asynccontextmanager
@@ -34,6 +35,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
 app.include_router(stories_router)
 app.include_router(characters_router)
 app.include_router(episodes_router)

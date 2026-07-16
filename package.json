@@ -3,13 +3,18 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
-    "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
-    "build": "pnpm run typecheck && pnpm -r --if-present run build",
+    "preinstall": "node scripts/check-pnpm.cjs",
+    "build": "node scripts/run-pnpm.cjs run typecheck && node scripts/run-pnpm.cjs -r --if-present run build",
     "typecheck:libs": "tsc --build",
-    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
+    "typecheck": "node scripts/run-pnpm.cjs run typecheck:libs && node scripts/run-pnpm.cjs -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
+    "dev:frontend": "node scripts/run-pnpm.cjs --filter @workspace/app dev",
+    "dev:backend": "node scripts/run-backend.cjs",
+    "build:frontend": "node scripts/run-pnpm.cjs --filter @workspace/app build",
+    "build:backend": "python -m py_compile artifacts/pipeline/src/auth.py artifacts/pipeline/src/main.py artifacts/pipeline/src/routes/stories.py artifacts/pipeline/src/routes/bibles.py artifacts/pipeline/src/routes/characters.py artifacts/pipeline/src/routes/episodes.py artifacts/pipeline/src/routes/jobs.py artifacts/pipeline/src/routes/scenes.py artifacts/pipeline/src/pipeline/orchestrator.py artifacts/pipeline/src/pipeline/story_agent.py artifacts/pipeline/src/pipeline/character_gen.py artifacts/pipeline/src/pipeline/scene_gen.py artifacts/pipeline/src/pipeline/assembler.py"
   },
   "private": true,
   "devDependencies": {
+    "lightningcss": "^1.32.0",
     "prettier": "^3.8.4",
     "typescript": "~5.9.3"
   }

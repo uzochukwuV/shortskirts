@@ -50,7 +50,14 @@ async def run_story_generation(story_id: str, job_id: str):
         await update_job(pool, job_id, total_steps=total_steps, current_step="Generating character references")
         characters = await pool.fetch("SELECT * FROM characters WHERE story_id = $1", story_id)
         char_map: dict = {}
-
+        missing_ref_characters: set[str] = set()
+        expected_character_names = {
+            c.get("name", "").strip()
+            for c in plan.get("characters", [])
+            if c.get("name", "").strip()
+        }
+        if expected_character_names and not characters:
+            raise RuntimeError("Story plan includes characters, but none were materialized")
         for char_row in characters:
             char_dict = dict(char_row)
             char_name = char_dict["name"]
@@ -82,9 +89,15 @@ async def run_story_generation(story_id: str, job_id: str):
                     char_dict["ref_image_urls"] = ref_urls
                 except Exception as e:
                     print(f"[orchestrator] Character ref gen failed for {char_name}: {e}")
+                    missing_ref_characters.add(char_name)
+
+            refs = char_dict.get("ref_image_urls")
+            if isinstance(refs, str):
+                refs = json.loads(refs)
+            if not refs:
+                missing_ref_characters.add(char_name)
 
             char_map[char_name] = char_dict
-
         step += 1
 
         # ── Generate scenes per episode ───────────────────────────────────────
@@ -163,7 +176,14 @@ async def run_story_generation(story_id: str, job_id: str):
                         if isinstance(refs, str):
                             refs = json.loads(refs)
                         char_refs.extend(refs or [])
+                        if not refs:
+                            missing_ref_characters.add(char_name)
                 char_refs = char_refs[:4]
+                if chars_in_scene and not char_refs:
+                    print(
+                        f"[orchestrator] Warning: Scene {scene_num} has characters "
+                        "but no usable reference images"
+                    )
 
                 try:
                     result = await generate_scene_clip(
@@ -239,15 +259,19 @@ async def run_story_generation(story_id: str, job_id: str):
 
         # ── Fix: use 'completed' not 'ready' ──────────────────────────────────
         await pool.execute("UPDATE stories SET status='completed' WHERE id=$1", story_id)
+        result = {"story_id": story_id}
+        if missing_ref_characters:
+            result["warnings"] = {
+                "missing_character_refs": sorted(missing_ref_characters),
+            }
         await update_job(
             pool, job_id,
             status="completed",
             progress=total_steps,
             current_step="Done",
             completed_at=datetime.utcnow(),
-            result={"story_id": story_id},
+            result=result,
         )
-
     except Exception as e:
         print(f"[orchestrator] Story generation failed: {e}")
         await update_job(

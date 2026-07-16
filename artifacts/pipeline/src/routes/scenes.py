@@ -11,11 +11,21 @@ Key endpoints:
 import json
 import asyncio
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from db.connection import get_pool
 from models.story import SceneResponse, GenerationJobResponse
+from auth import get_current_user, user_id
 
 router = APIRouter(prefix="/pipeline/scenes", tags=["scenes"])
+async def _scene_belongs_to_owner(pool, scene_id: str, owner_id: str) -> bool:
+    return bool(await pool.fetchval(
+        """SELECT 1 FROM scenes sc
+           JOIN episodes e ON e.id = sc.episode_id
+           JOIN stories s ON s.id = e.story_id
+           WHERE sc.id=$1 AND s.owner_id=$2""",
+        scene_id,
+        owner_id,
+    ))
 
 
 # ─── Helper ───────────────────────────────────────────────────────────────────
@@ -53,8 +63,10 @@ def _row_to_scene(r, metadata: dict | None = None) -> SceneResponse:
 # ─── Get scene ────────────────────────────────────────────────────────────────
 
 @router.get("/{scene_id}", response_model=SceneResponse)
-async def get_scene(scene_id: str):
+async def get_scene(scene_id: str, user=Depends(get_current_user)):
     pool = await get_pool()
+    if not await _scene_belongs_to_owner(pool, scene_id, user_id(user)):
+        raise HTTPException(status_code=404, detail="Scene not found")
     row = await pool.fetchrow("SELECT * FROM scenes WHERE id=$1", scene_id)
     if not row:
         raise HTTPException(status_code=404, detail="Scene not found")
@@ -64,8 +76,10 @@ async def get_scene(scene_id: str):
 # ─── Approve scene ────────────────────────────────────────────────────────────
 
 @router.put("/{scene_id}/approve", response_model=SceneResponse)
-async def approve_scene(scene_id: str):
+async def approve_scene(scene_id: str, user=Depends(get_current_user)):
     pool = await get_pool()
+    if not await _scene_belongs_to_owner(pool, scene_id, user_id(user)):
+        raise HTTPException(status_code=404, detail="Scene not found")
     row = await pool.fetchrow(
         """UPDATE scenes
            SET approval_status='approved', approved_at=now(), updated_at=now()
@@ -80,8 +94,10 @@ async def approve_scene(scene_id: str):
 # ─── Reject scene ─────────────────────────────────────────────────────────────
 
 @router.put("/{scene_id}/reject", response_model=SceneResponse)
-async def reject_scene(scene_id: str):
+async def reject_scene(scene_id: str, user=Depends(get_current_user)):
     pool = await get_pool()
+    if not await _scene_belongs_to_owner(pool, scene_id, user_id(user)):
+        raise HTTPException(status_code=404, detail="Scene not found")
     row = await pool.fetchrow(
         """UPDATE scenes
            SET approval_status='rejected', approved_at=NULL, updated_at=now()
@@ -96,8 +112,10 @@ async def reject_scene(scene_id: str):
 # ─── Lock scene ───────────────────────────────────────────────────────────────
 
 @router.put("/{scene_id}/lock", response_model=SceneResponse)
-async def lock_scene(scene_id: str):
+async def lock_scene(scene_id: str, user=Depends(get_current_user)):
     pool = await get_pool()
+    if not await _scene_belongs_to_owner(pool, scene_id, user_id(user)):
+        raise HTTPException(status_code=404, detail="Scene not found")
     row = await pool.fetchrow(
         "UPDATE scenes SET locked=true, updated_at=now() WHERE id=$1 RETURNING *",
         scene_id,
@@ -110,8 +128,10 @@ async def lock_scene(scene_id: str):
 # ─── Regenerate scene ────────────────────────────────────────────────────────
 
 @router.post("/{scene_id}/regenerate", response_model=GenerationJobResponse)
-async def regenerate_scene(scene_id: str, background_tasks: BackgroundTasks):
+async def regenerate_scene(scene_id: str, background_tasks: BackgroundTasks, user=Depends(get_current_user)):
     pool = await get_pool()
+    if not await _scene_belongs_to_owner(pool, scene_id, user_id(user)):
+        raise HTTPException(status_code=404, detail="Scene not found")
 
     scene = await pool.fetchrow("SELECT * FROM scenes WHERE id=$1", scene_id)
     if not scene:
