@@ -9,11 +9,10 @@ Key endpoints:
   GET  /pipeline/scenes/{id}               — get scene detail
 """
 import json
-import asyncio
-from datetime import datetime
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from fastapi import APIRouter, HTTPException, Depends
 from db.connection import get_pool
 from models.story import SceneResponse, GenerationJobResponse
+from job_queue import enqueue_job, WORKLOAD_MEDIA
 from auth import get_current_user, user_id
 
 router = APIRouter(prefix="/pipeline/scenes", tags=["scenes"])
@@ -128,7 +127,7 @@ async def lock_scene(scene_id: str, user=Depends(get_current_user)):
 # ─── Regenerate scene ────────────────────────────────────────────────────────
 
 @router.post("/{scene_id}/regenerate", response_model=GenerationJobResponse)
-async def regenerate_scene(scene_id: str, background_tasks: BackgroundTasks, user=Depends(get_current_user)):
+async def regenerate_scene(scene_id: str, user=Depends(get_current_user)):
     pool = await get_pool()
     if not await _scene_belongs_to_owner(pool, scene_id, user_id(user)):
         raise HTTPException(status_code=404, detail="Scene not found")
@@ -157,8 +156,7 @@ async def regenerate_scene(scene_id: str, background_tasks: BackgroundTasks, use
         "UPDATE scenes SET status='running', approval_status='pending', updated_at=now() WHERE id=$1",
         scene_id,
     )
-
-    background_tasks.add_task(_regen_scene_bg, scene_id, job_id)
+    await enqueue_job(job_id, workload=WORKLOAD_MEDIA)
 
     return GenerationJobResponse(
         id=job_id,
@@ -171,119 +169,3 @@ async def regenerate_scene(scene_id: str, background_tasks: BackgroundTasks, use
         job_type="scene_regen",
         created_at=job_row["created_at"],
     )
-
-
-async def _regen_scene_bg(scene_id: str, job_id: str):
-    """Background task: re-generate a single scene clip."""
-    from pipeline.scene_gen import generate_scene_clip
-    from pipeline.story_agent import build_scene_prompt
-
-    pool = await get_pool()
-
-    async def _upd(**kw):
-        fields, vals = [], []
-        for i, (k, v) in enumerate(kw.items(), 1):
-            if k == "result" and isinstance(v, dict):
-                fields.append(f"{k}=${i}::jsonb")
-                vals.append(json.dumps(v))
-            else:
-                fields.append(f"{k}=${i}")
-                vals.append(v)
-        vals.append(job_id)
-        await pool.execute(
-            f"UPDATE generation_jobs SET {','.join(fields)} WHERE id=${len(vals)}",
-            *vals,
-        )
-
-    try:
-        await _upd(status="running", started_at=datetime.utcnow(), current_step="Loading context")
-
-        scene = await pool.fetchrow("SELECT * FROM scenes WHERE id=$1", scene_id)
-        episode = await pool.fetchrow("SELECT * FROM episodes WHERE id=$1", scene["episode_id"])
-        story = await pool.fetchrow("SELECT * FROM stories WHERE id=$1", episode["story_id"])
-
-        plan = story["episode_plan"]
-        if isinstance(plan, str):
-            plan = json.loads(plan)
-
-        # Find the scene plan in the episode plan
-        ep_num = episode["episode_number"]
-        scene_num = scene["scene_number"]
-        scene_plan = {}
-        for ep in plan.get("episodes", []):
-            if ep["episode_number"] == ep_num:
-                for sc in ep.get("scenes", []):
-                    if sc["scene_number"] == scene_num:
-                        scene_plan = sc
-                        break
-                break
-
-        # Restore from generation_metadata if scene_plan not in episode plan
-        if not scene_plan:
-            meta = scene["generation_metadata"]
-            if isinstance(meta, str):
-                meta = json.loads(meta) if meta else {}
-            scene_plan = {
-                "scene_number": scene_num,
-                "title": (meta or {}).get("title", f"Scene {scene_num}"),
-                "description": (meta or {}).get("description", ""),
-                "visual_prompt": scene["prompt"],
-                "mood": (meta or {}).get("mood", ""),
-                "location": (meta or {}).get("location", ""),
-                "action": (meta or {}).get("action", ""),
-                "characters_present": (meta or {}).get("characters_present", []),
-            }
-
-        # Load character refs
-        characters = await pool.fetch(
-            "SELECT * FROM characters WHERE story_id=$1", str(story["id"])
-        )
-        char_map = {r["name"]: dict(r) for r in characters}
-        char_refs = []
-        for cname in scene_plan.get("characters_present", []):
-            char = char_map.get(cname)
-            if char:
-                refs = char.get("ref_image_urls") or []
-                if isinstance(refs, str):
-                    refs = json.loads(refs)
-                char_refs.extend(refs)
-        char_refs = char_refs[:4]
-
-        await _upd(current_step="Generating new video clip")
-
-        result = await generate_scene_clip(
-            story_id=str(story["id"]),
-            episode_id=str(episode["id"]),
-            scene=scene_plan,
-            story_context=plan,
-            character_refs=char_refs,
-            previous_exit_frame_url=None,   # no bridging on regen
-            previous_scene_summary="",
-            style=story["style"],
-        )
-
-        # Preserve existing metadata and merge new result
-        existing_meta = scene["generation_metadata"]
-        if isinstance(existing_meta, str):
-            existing_meta = json.loads(existing_meta) if existing_meta else {}
-        merged = {**(existing_meta or {}), "visual_prompt": result["prompt"], "refs_used": result.get("refs_used", 0)}
-
-        regen_count = (scene.get("regeneration_count") or 0) + 1
-        await pool.execute(
-            """UPDATE scenes SET clip_url=$1, exit_frame_url=$2, duration=$3,
-               status='completed', approval_status='pending',
-               generation_metadata=$4::jsonb, regeneration_count=$5, updated_at=now()
-               WHERE id=$6""",
-            result["clip_url"], result.get("exit_frame_url"),
-            result.get("duration", 5.0), json.dumps(merged), regen_count, scene_id,
-        )
-
-        await _upd(
-            status="completed", progress=1, current_step="Done",
-            completed_at=datetime.utcnow(), result={"scene_id": scene_id, "clip_url": result["clip_url"]},
-        )
-
-    except Exception as e:
-        print(f"[scenes] Regen failed for {scene_id}: {e}")
-        await pool.execute("UPDATE scenes SET status='failed', updated_at=now() WHERE id=$1", scene_id)
-        await _upd(status="failed", current_step=f"Failed: {str(e)[:200]}", completed_at=datetime.utcnow())

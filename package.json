@@ -9,8 +9,11 @@
     "typecheck": "node scripts/run-pnpm.cjs run typecheck:libs && node scripts/run-pnpm.cjs -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
     "dev:frontend": "node scripts/run-pnpm.cjs --filter @workspace/app dev",
     "dev:backend": "node scripts/run-backend.cjs",
+    "dev:worker": "node scripts/run-worker.cjs",
+    "dev:worker:story": "node scripts/run-worker.cjs story",
+    "dev:worker:media": "node scripts/run-worker.cjs media",
     "build:frontend": "node scripts/run-pnpm.cjs --filter @workspace/app build",
-    "build:backend": "python -m py_compile artifacts/pipeline/src/auth.py artifacts/pipeline/src/main.py artifacts/pipeline/src/routes/stories.py artifacts/pipeline/src/routes/bibles.py artifacts/pipeline/src/routes/characters.py artifacts/pipeline/src/routes/episodes.py artifacts/pipeline/src/routes/jobs.py artifacts/pipeline/src/routes/scenes.py artifacts/pipeline/src/pipeline/orchestrator.py artifacts/pipeline/src/pipeline/story_agent.py artifacts/pipeline/src/pipeline/character_gen.py artifacts/pipeline/src/pipeline/scene_gen.py artifacts/pipeline/src/pipeline/assembler.py"
+    "build:backend": "python -m py_compile artifacts/pipeline/src/auth.py artifacts/pipeline/src/main.py artifacts/pipeline/src/job_queue.py artifacts/pipeline/src/worker.py artifacts/pipeline/src/routes/stories.py artifacts/pipeline/src/routes/bibles.py artifacts/pipeline/src/routes/characters.py artifacts/pipeline/src/routes/episodes.py artifacts/pipeline/src/routes/jobs.py artifacts/pipeline/src/routes/scenes.py artifacts/pipeline/src/pipeline/job_runtime.py artifacts/pipeline/src/pipeline/job_handlers.py artifacts/pipeline/src/pipeline/metrics.py artifacts/pipeline/src/pipeline/provider_policy.py artifacts/pipeline/src/pipeline/runtime_context.py artifacts/pipeline/src/pipeline/orchestrator.py artifacts/pipeline/src/pipeline/story_agent.py artifacts/pipeline/src/pipeline/character_gen.py artifacts/pipeline/src/pipeline/scene_gen.py artifacts/pipeline/src/pipeline/assembler.py"
   },
   "private": true,
   "devDependencies": {

@@ -156,6 +156,38 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
 );
 
 ALTER TABLE generation_jobs ADD COLUMN IF NOT EXISTS job_type TEXT NOT NULL DEFAULT 'full_episode';
+ALTER TABLE generation_jobs ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;
+ALTER TABLE generation_jobs ADD COLUMN IF NOT EXISTS max_attempts INT NOT NULL DEFAULT 3;
+ALTER TABLE generation_jobs ADD COLUMN IF NOT EXISTS worker_id TEXT;
+ALTER TABLE generation_jobs ADD COLUMN IF NOT EXISTS leased_at TIMESTAMPTZ;
+ALTER TABLE generation_jobs ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
+ALTER TABLE generation_jobs ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ;
+ALTER TABLE generation_jobs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS idx_jobs_entity ON generation_jobs(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON generation_jobs(status);
+
+-- ── Metrics ────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS pipeline_metrics (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    metric_kind TEXT NOT NULL,
+    status TEXT NOT NULL,
+    duration_ms INT,
+    provider_latency_ms INT,
+    estimated_cost_usd DECIMAL(12,6),
+    retries INT NOT NULL DEFAULT 0,
+    step_name TEXT,
+    provider TEXT,
+    error TEXT,
+    job_id UUID,
+    entity_type TEXT,
+    entity_id UUID,
+    workload TEXT,
+    extra JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_metrics_kind ON pipeline_metrics(metric_kind);
+CREATE INDEX IF NOT EXISTS idx_pipeline_metrics_job_id ON pipeline_metrics(job_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_metrics_created_at ON pipeline_metrics(created_at);

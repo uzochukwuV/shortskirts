@@ -1,39 +1,20 @@
-import asyncio
 import json
 from datetime import datetime
 from typing import Optional
 
 from db.connection import get_pool
 from pipeline.character_gen import generate_character_references, get_character_embedding
+from pipeline.job_runtime import update_job
 from pipeline.scene_gen import generate_scene_clip
 from pipeline.assembler import assemble_episode
-
-
-async def update_job(pool, job_id: str, **kwargs):
-    fields = []
-    values = []
-    i = 1
-    for k, v in kwargs.items():
-        if k == "result" and isinstance(v, dict):
-            fields.append(f"{k} = ${i}::jsonb")
-            values.append(json.dumps(v))
-        else:
-            fields.append(f"{k} = ${i}")
-            values.append(v)
-        i += 1
-    values.append(job_id)
-    await pool.execute(
-        f"UPDATE generation_jobs SET {', '.join(fields)} WHERE id = ${i}",
-        *values,
-    )
 
 
 async def run_story_generation(story_id: str, job_id: str):
     pool = await get_pool()
 
-    try:
-        await update_job(pool, job_id, status="running", started_at=datetime.utcnow(), current_step="Loading story")
+    await update_job(pool, job_id, status="running", started_at=datetime.utcnow(), current_step="Loading story")
 
+    try:
         story = await pool.fetchrow("SELECT * FROM stories WHERE id = $1", story_id)
         if not story:
             raise ValueError(f"Story {story_id} not found")
@@ -272,12 +253,7 @@ async def run_story_generation(story_id: str, job_id: str):
             completed_at=datetime.utcnow(),
             result=result,
         )
+        return result
     except Exception as e:
         print(f"[orchestrator] Story generation failed: {e}")
-        await update_job(
-            pool, job_id,
-            status="failed",
-            error=str(e),
-            completed_at=datetime.utcnow(),
-        )
-        await pool.execute("UPDATE stories SET status='failed' WHERE id=$1", story_id)
+        raise

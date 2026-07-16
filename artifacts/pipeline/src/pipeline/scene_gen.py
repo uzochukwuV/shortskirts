@@ -7,6 +7,7 @@ from typing import Optional
 
 from storage.b2 import upload_bytes, download_url_to_bytes, build_key
 from pipeline.story_agent import build_scene_prompt
+from pipeline.provider_policy import run_provider_step
 
 # ─── Model config ─────────────────────────────────────────────────────────────
 
@@ -97,9 +98,12 @@ async def _try_dashscope_video(prompt: str, image_url: Optional[str] = None) -> 
             }
 
         async with httpx.AsyncClient(timeout=30) as http:
-            r = await http.post(endpoint, headers=headers, json=payload)
-            r.raise_for_status()
-            data = r.json()
+            data = await run_provider_step(
+                "dashscope_video_submit",
+                "video:dashscope:submit",
+                lambda: _post_json(http, endpoint, headers, payload),
+                extra={"model": payload["model"]},
+            )
 
         task_id = data["output"]["task_id"]
         print(f"[scene_gen] DashScope video task submitted: {task_id}")
@@ -118,12 +122,16 @@ async def _poll_dashscope_video(task_id: str, api_key: str, timeout: int = 600) 
         await asyncio.sleep(10)
         try:
             async with httpx.AsyncClient(timeout=30) as http:
-                r = await http.get(
-                    f"{DASHSCOPE_VIDEO_BASE}/tasks/{task_id}",
-                    headers=headers,
+                data = await run_provider_step(
+                    "dashscope_video_poll",
+                    "video:dashscope:poll",
+                    lambda: _get_json(
+                        http,
+                        f"{DASHSCOPE_VIDEO_BASE}/tasks/{task_id}",
+                        headers=headers,
+                    ),
+                    extra={"task_id": task_id},
                 )
-                r.raise_for_status()
-                data = r.json()
 
             status = data["output"]["task_status"].lower()
             print(f"[scene_gen] DashScope task {task_id}: {status}")
@@ -166,15 +174,12 @@ async def _try_aiml_video(prompt: str, image_url: Optional[str] = None) -> str:
         payload = {"model": AIML_T2V_MODEL, "prompt": prompt, "duration": 5}
 
     async with httpx.AsyncClient(timeout=30) as http:
-        r = await http.post(f"{AIML_BASE_URL}/v2/video/generations", headers=headers, json=payload)
-
-        if r.status_code != 200 and image_url:
-            print(f"[scene_gen] AIML i2v failed ({r.status_code}), retrying as t2v")
-            payload = {"model": AIML_T2V_MODEL, "prompt": prompt, "duration": 5}
-            r = await http.post(f"{AIML_BASE_URL}/v2/video/generations", headers=headers, json=payload)
-
-        r.raise_for_status()
-        data = r.json()
+        data = await run_provider_step(
+            "aiml_video_submit",
+            "video:aiml:submit",
+            lambda: _post_json(http, f"{AIML_BASE_URL}/v2/video/generations", headers, payload),
+            extra={"model": payload["model"]},
+        )
 
     task_id = data.get("id") or data.get("generation_id") or data.get("task_id")
     if not task_id:
@@ -191,13 +196,17 @@ async def _poll_aiml_video(task_id: str, api_key: str, timeout: int = 600) -> st
         await asyncio.sleep(15)
         try:
             async with httpx.AsyncClient(timeout=30) as http:
-                r = await http.get(
-                    f"{AIML_BASE_URL}/v2/video/generations",
-                    headers=headers,
-                    params={"generation_id": task_id},
+                data = await run_provider_step(
+                    "aiml_video_poll",
+                    "video:aiml:poll",
+                    lambda: _get_json(
+                        http,
+                        f"{AIML_BASE_URL}/v2/video/generations",
+                        headers=headers,
+                        params={"generation_id": task_id},
+                    ),
+                    extra={"task_id": task_id},
                 )
-                r.raise_for_status()
-                data = r.json()
 
             status = (data.get("status") or data.get("task_status") or "").lower()
             print(f"[scene_gen] AIML task {task_id}: {status}")
@@ -241,6 +250,18 @@ async def _generate_video(prompt: str, image_url: Optional[str] = None) -> str:
 
     print("[scene_gen] DashScope unavailable, using AIML fallback")
     return await _try_aiml_video(prompt, image_url)
+
+
+async def _post_json(http: httpx.AsyncClient, url: str, headers: dict, payload: dict):
+    r = await http.post(url, headers=headers, json=payload)
+    r.raise_for_status()
+    return r.json()
+
+
+async def _get_json(http: httpx.AsyncClient, url: str, headers: dict, params: dict | None = None):
+    r = await http.get(url, headers=headers, params=params)
+    r.raise_for_status()
+    return r.json()
 
 
 # ─── Exit frame extraction ────────────────────────────────────────────────────

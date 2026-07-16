@@ -25,6 +25,13 @@ def _job_response(row) -> GenerationJobResponse:
         completed_at=row["completed_at"],
         created_at=row["created_at"],
         job_type=row.get("job_type", "full_episode"),
+        attempts=row.get("attempts", 0),
+        max_attempts=row.get("max_attempts", 3),
+        worker_id=row.get("worker_id"),
+        leased_at=row.get("leased_at"),
+        lease_expires_at=row.get("lease_expires_at"),
+        last_heartbeat_at=row.get("last_heartbeat_at"),
+        updated_at=row.get("updated_at"),
     )
 
 

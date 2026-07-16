@@ -1,9 +1,10 @@
 import json
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from fastapi import APIRouter, HTTPException, Depends
 from db.connection import get_pool
 from models.story import StoryCreate, StoryResponse, GenerationJobResponse
 from pipeline.story_agent import generate_episode_plan
-from pipeline.orchestrator import run_story_generation
+from job_queue import enqueue_job, WORKLOAD_STORY
+from pipeline.runtime_context import job_context
 from auth import get_current_user, user_id
 
 router = APIRouter(prefix="/pipeline/stories", tags=["stories"])
@@ -49,15 +50,16 @@ async def create_story(body: StoryCreate, user=Depends(get_current_user)):
                 "content": content or {},
             })
 
-    plan = await generate_episode_plan(
-        prompt=body.prompt,
-        genre=body.genre,
-        style=body.style,
-        num_episodes=body.num_episodes,
-        num_scenes=body.num_scenes,
-        workflow_type=body.workflow_type.value,
-        bibles=bibles,
-    )
+    async with job_context(entity_type="story", workload=WORKLOAD_STORY):
+        plan = await generate_episode_plan(
+            prompt=body.prompt,
+            genre=body.genre,
+            style=body.style,
+            num_episodes=body.num_episodes,
+            num_scenes=body.num_scenes,
+            workflow_type=body.workflow_type.value,
+            bibles=bibles,
+        )
 
     row = await pool.fetchrow(
         """INSERT INTO stories
@@ -189,7 +191,6 @@ async def approve_outline(story_id: str, user=Depends(get_current_user)):
 @router.post("/{story_id}/generate", response_model=GenerationJobResponse)
 async def generate_story(
     story_id: str,
-    background_tasks: BackgroundTasks,
     user=Depends(get_current_user),
 ):
     pool = await get_pool()
@@ -216,11 +217,11 @@ async def generate_story(
         story_id,
     )
     job_id = str(job_row["id"])
+    await enqueue_job(job_id, workload=WORKLOAD_STORY)
     await pool.execute(
         "UPDATE stories SET status='generating', updated_at=now() WHERE id=$1",
         story_id,
     )
-    background_tasks.add_task(run_story_generation, story_id, job_id)
 
     return GenerationJobResponse(
         id=job_id,

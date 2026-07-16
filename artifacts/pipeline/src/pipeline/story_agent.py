@@ -2,6 +2,8 @@ import os
 import json
 from openai import AsyncOpenAI
 
+from pipeline.provider_policy import run_provider_step
+
 # ─── Clients ──────────────────────────────────────────────────────────────────
 
 _qwen_client: AsyncOpenAI | None = None
@@ -43,9 +45,16 @@ async def _chat(messages: list, temperature: float = 0.8, max_tokens: int = 4096
     qwen = get_qwen_client()
     for model in QWEN_LLM_MODELS:
         try:
-            resp = await qwen.chat.completions.create(
-                model=model, messages=messages,
-                temperature=temperature, max_tokens=max_tokens,
+            resp = await run_provider_step(
+                "qwen_llm",
+                f"llm:{model}",
+                lambda: qwen.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                ),
+                extra={"model": model},
             )
             content = resp.choices[0].message.content
             if content:
@@ -61,9 +70,16 @@ async def _chat(messages: list, temperature: float = 0.8, max_tokens: int = 4096
         aiml = get_aiml_client()
         for model in AIML_LLM_MODELS:
             try:
-                resp = await aiml.chat.completions.create(
-                    model=model, messages=messages,
-                    temperature=temperature, max_tokens=max_tokens,
+                resp = await run_provider_step(
+                    "aiml_llm",
+                    f"llm:{model}",
+                    lambda: aiml.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    ),
+                    extra={"model": model},
                 )
                 content = resp.choices[0].message.content
                 if content:

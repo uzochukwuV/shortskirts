@@ -5,6 +5,7 @@ from typing import Optional
 
 from storage.b2 import upload_bytes, build_key
 from pipeline.story_agent import generate_character_image_prompt
+from pipeline.provider_policy import run_provider_step
 
 QWEN_IMAGE_BASE = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 AIML_BASE_URL = "https://api.aimlapi.com"
@@ -57,21 +58,29 @@ async def _try_dashscope_image(prompt: str) -> Optional[bytes]:
     for model in QWEN_IMAGE_MODELS:
         try:
             async with httpx.AsyncClient(timeout=90) as http:
-                r = await http.post(
-                    f"{QWEN_IMAGE_BASE}/images/generations",
-                    headers={
-                        "Authorization": f"Bearer {dashscope_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={"model": model, "prompt": prompt, "n": 1, "size": "1024x1024"},
+                data = await run_provider_step(
+                    "dashscope_image",
+                    f"image:{model}:submit",
+                    lambda: _post_json(
+                        http,
+                        f"{QWEN_IMAGE_BASE}/images/generations",
+                        headers={
+                            "Authorization": f"Bearer {dashscope_key}",
+                            "Content-Type": "application/json",
+                        },
+                        payload={"model": model, "prompt": prompt, "n": 1, "size": "1024x1024"},
+                    ),
+                    extra={"model": model},
                 )
-                r.raise_for_status()
-                data = r.json()
 
             image_url = data["data"][0]["url"]
             async with httpx.AsyncClient(timeout=60) as http:
-                img_r = await http.get(image_url, follow_redirects=True)
-                img_r.raise_for_status()
+                img_r = await run_provider_step(
+                    "dashscope_image",
+                    f"image:{model}:download",
+                    lambda: http.get(image_url, follow_redirects=True),
+                    extra={"model": model},
+                )
                 print(f"[character_gen] Generated image via DashScope model: {model}")
                 return img_r.content
 
@@ -90,21 +99,29 @@ async def _try_aiml_image(prompt: str) -> Optional[bytes]:
     for model in AIML_IMAGE_MODELS:
         try:
             async with httpx.AsyncClient(timeout=60) as http:
-                r = await http.post(
-                    f"{AIML_BASE_URL}/v1/images/generations",
-                    headers={
-                        "Authorization": f"Bearer {aiml_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={"model": model, "prompt": prompt, "n": 1, "size": "1024x1024"},
+                data = await run_provider_step(
+                    "aiml_image",
+                    f"image:{model}:submit",
+                    lambda: _post_json(
+                        http,
+                        f"{AIML_BASE_URL}/v1/images/generations",
+                        headers={
+                            "Authorization": f"Bearer {aiml_key}",
+                            "Content-Type": "application/json",
+                        },
+                        payload={"model": model, "prompt": prompt, "n": 1, "size": "1024x1024"},
+                    ),
+                    extra={"model": model},
                 )
-                r.raise_for_status()
-                data = r.json()
 
             image_url = data["data"][0]["url"]
             async with httpx.AsyncClient(timeout=60) as http:
-                img_r = await http.get(image_url, follow_redirects=True)
-                img_r.raise_for_status()
+                img_r = await run_provider_step(
+                    "aiml_image",
+                    f"image:{model}:download",
+                    lambda: http.get(image_url, follow_redirects=True),
+                    extra={"model": model},
+                )
                 print(f"[character_gen] Generated image via AIML model: {model}")
                 return img_r.content
 
@@ -114,6 +131,12 @@ async def _try_aiml_image(prompt: str) -> Optional[bytes]:
 
     print("[character_gen] All image models failed.")
     return None
+
+
+async def _post_json(http: httpx.AsyncClient, url: str, headers: dict, payload: dict):
+    r = await http.post(url, headers=headers, json=payload)
+    r.raise_for_status()
+    return r.json()
 
 
 def get_character_embedding(character: dict) -> list[float]:

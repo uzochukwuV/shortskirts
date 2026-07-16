@@ -14,4 +14,5 @@ pillow==11.1.0
 moviepy==1.0.3
 numpy==1.26.4
 aiofiles==24.1.0
+redis==5.0.8
 tenacity==9.0.0

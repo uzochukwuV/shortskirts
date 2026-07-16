@@ -180,3 +180,10 @@ class GenerationJobResponse(BaseModel):
     completed_at: Optional[datetime] = None
     created_at: datetime
     job_type: str = "full_episode"
+    attempts: int = 0
+    max_attempts: int = 3
+    worker_id: Optional[str] = None
+    leased_at: Optional[datetime] = None
+    lease_expires_at: Optional[datetime] = None
+    last_heartbeat_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
