@@ -111,7 +111,7 @@ export type GenerationJob = {
   created_at: string;
 };
 
-const BASE = "/pipeline";
+const BASE = import.meta.env.VITE_PIPELINE_API_BASE?.trim()?.replace(/\/+$/, "") || "/pipeline";
 const AUTH_TOKEN_KEY = "storyforge_auth_token";
 
 export function getAuthToken() {

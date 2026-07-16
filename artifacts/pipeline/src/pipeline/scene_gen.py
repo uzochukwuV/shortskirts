@@ -13,9 +13,11 @@ from pipeline.story_agent import build_scene_prompt
 DASHSCOPE_VIDEO_BASE = "https://dashscope-intl.aliyuncs.com/api/v1"
 AIML_BASE_URL = "https://api.aimlapi.com"
 
-# AIML video models (used as primary for video — DashScope video attempted first)
+# Video models
+DASHSCOPE_I2V_MODEL = "wan2.7-i2v-2026-04-25"
+DASHSCOPE_T2V_MODEL = "wan2.7-t2v-2026-06-12"
 AIML_I2V_MODEL = "alibaba/wan2.7-i2v"
-AIML_T2V_MODEL = "alibaba/wan2.1-t2v-turbo"
+AIML_T2V_MODEL = "alibaba/wan2.7-t2v"
 
 
 # ─── Public API ───────────────────────────────────────────────────────────────
@@ -77,18 +79,21 @@ async def _try_dashscope_video(prompt: str, image_url: Optional[str] = None) -> 
         }
 
         if image_url:
-            endpoint = f"{DASHSCOPE_VIDEO_BASE}/services/aigc/image2video/video-synthesis"
+            endpoint = f"{DASHSCOPE_VIDEO_BASE}/services/aigc/video-generation/video-synthesis"
             payload = {
-                "model": "wanx2.1-i2v-turbo",
-                "input": {"prompt": prompt, "image_url": image_url},
-                "parameters": {"duration": 5},
+                "model": DASHSCOPE_I2V_MODEL,
+                "input": {
+                    "prompt": prompt,
+                    "media": [{"type": "first_frame", "url": image_url}],
+                },
+                "parameters": {"resolution": "720P", "duration": 5},
             }
         else:
-            endpoint = f"{DASHSCOPE_VIDEO_BASE}/services/aigc/video-generation/generation"
+            endpoint = f"{DASHSCOPE_VIDEO_BASE}/services/aigc/video-generation/video-synthesis"
             payload = {
-                "model": "wanx2.1-t2v-turbo",
+                "model": DASHSCOPE_T2V_MODEL,
                 "input": {"prompt": prompt},
-                "parameters": {"duration": 5},
+                "parameters": {"resolution": "720P", "duration": 5},
             }
 
         async with httpx.AsyncClient(timeout=30) as http:

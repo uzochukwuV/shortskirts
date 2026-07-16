@@ -20,18 +20,36 @@ def get_write_client():
     )
 
 
+def get_read_client():
+    """Read key — used for download URLs that third-party model providers fetch."""
+    key_id = os.environ.get("B2_READ_KEY_ID") or os.environ.get("B2_KEY_ID")
+    app_key = os.environ.get("B2_READ_APPLICATION_KEY") or os.environ.get("B2_APPLICATION_KEY")
+    return boto3.client(
+        "s3",
+        endpoint_url=f"https://{_env('B2_ENDPOINT_URL')}",
+        aws_access_key_id=key_id,
+        aws_secret_access_key=app_key,
+        config=Config(signature_version="s3v4"),
+        region_name="us-east-005",
+    )
+
+
 def BUCKET() -> str:
     return _env("B2_BUCKET_NAME")
 
 
 def public_url(key: str) -> str:
-    """B2 native CDN URL — works when bucket is Public OR key has readFiles.
-    Format: https://f005.backblazeb2.com/file/{bucket}/{key}
-    To enable: in Backblaze dashboard set bucket to Public, or create a key
-    with the 'readFiles' capability checked.
+    """Return a signed GET URL for a private B2 object.
+
+    The bucket in this workspace is not public, so downstream services like
+    AIML/DashScope must receive a fetchable presigned URL rather than a bare
+    bucket path.
     """
-    # Use B2 native CDN URL (not S3 endpoint) for better compatibility
-    return f"https://f005.backblazeb2.com/file/{BUCKET()}/{key}"
+    return get_read_client().generate_presigned_url(
+        "get_object",
+        Params={"Bucket": BUCKET(), "Key": key},
+        ExpiresIn=7 * 24 * 60 * 60,
+    )
 
 
 def upload_bytes(data: bytes, key: str, content_type: str = "application/octet-stream") -> str:
@@ -68,8 +86,11 @@ async def download_and_upload(url: str, key: str, content_type: str = "video/mp4
 
 
 def get_presigned_url(key: str, expires: int = 3600) -> str:
-    """Returns the public CDN URL. Requires bucket to be Public or key to have readFiles."""
-    return public_url(key)
+    return get_read_client().generate_presigned_url(
+        "get_object",
+        Params={"Bucket": BUCKET(), "Key": key},
+        ExpiresIn=expires,
+    )
 
 
 def build_key(story_id: str, *parts: str) -> str:

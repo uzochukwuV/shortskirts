@@ -1,0 +1,20 @@
+description: |
+  StoryForge Anime is an AI showrunner for creating consistent anime-style video series, branded campaigns, social shorts, educational explainers, and game lore trailers from a written brief. It turns prompts into story plans, characters, scene breakdowns, generated clips, and assembled episodes with approval gates and persistent story memory.
+
+summary: "AI showrunner for consistent anime-style video series and branded shorts"
+
+capabilities:
+  - "Generate story outlines, character profiles, episode plans, and scene breakdowns from a prompt"
+  - "Maintain persistent brand, world, and character bibles for consistent multi-episode production"
+  - "Approve, lock, regenerate, and assemble individual scenes into export-ready video episodes"
+
+use_cases:
+  - "Creators, agencies, educators, small businesses, and game teams producing recurring video content"
+  - "Turn briefs, lessons, product campaigns, or IP bibles into structured animated video workflows"
+
+tags:
+  - ai-video
+  - anime
+  - story-generation
+  - branded-content
+  - creator-tools

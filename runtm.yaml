@@ -1,0 +1,5 @@
+name: its-now-showing-failed-to-fetch-error
+template: docker
+port: 3000
+health_path: /health
+tier: starter

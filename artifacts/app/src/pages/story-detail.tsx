@@ -428,7 +428,7 @@ export default function StoryDetail() {
     queryKey: ["story", id],
     queryFn: () => api.getStory(id),
     enabled: !!id,
-    refetchInterval: d => (isGenerating((d as Story | undefined)?.status) ? 5000 : false),
+    refetchInterval: query => (isGenerating(query.state.data?.status) ? 5000 : false),
   });
 
   const { data: characters } = useQuery({

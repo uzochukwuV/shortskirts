@@ -89,7 +89,9 @@ if (!fs.existsSync(venvDir)) {
   runOrDie(create.command, create.args);
 }
 
-const pythonBin = path.join(venvDir, 'Scripts', 'python.exe');
+const pythonBin = process.platform === 'win32'
+  ? path.join(venvDir, 'Scripts', 'python.exe')
+  : path.join(venvDir, 'bin', 'python');
 if (!fs.existsSync(pythonBin)) {
   console.error('[pipeline] Virtualenv interpreter is missing. Remove artifacts/pipeline/.venv-py311 and rerun.');
   process.exit(1);
