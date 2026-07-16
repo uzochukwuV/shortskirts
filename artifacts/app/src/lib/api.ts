@@ -3,7 +3,8 @@ export type WorkflowType =
   | "brand_campaign"
   | "social_short"
   | "educational"
-  | "game_lore";
+  | "game_lore"
+  | "narrated_image_story";
 
 export type BibleType = "brand" | "character" | "world" | "campaign";
 
@@ -70,6 +71,7 @@ export type Scene = {
   scene_number: number;
   prompt: string;
   clip_url?: string;
+  image_url?: string;
   video_url?: string;
   exit_frame_url?: string;
   duration?: number;
@@ -82,6 +84,8 @@ export type Scene = {
   visual_prompt?: string;
   mood?: string;
   location?: string;
+  narration?: string;
+  media_kind?: "image" | "video";
 };
 
 export type User = {
@@ -108,6 +112,23 @@ export type GenerationJob = {
   result?: Record<string, any>;
   started_at?: string;
   completed_at?: string;
+  created_at: string;
+};
+
+export type GalleryItem = {
+  id: string;
+  kind: "scene" | "episode";
+  media_kind?: "image" | "video";
+  story_id: string;
+  story_title: string;
+  episode_id: string;
+  episode_number: number;
+  scene_id?: string | null;
+  scene_number?: number | null;
+  title: string;
+  summary?: string | null;
+  media_url: string;
+  duration?: number | null;
   created_at: string;
 };
 
@@ -192,6 +213,8 @@ export const api = {
   regenerateScene: (id: string) => req<GenerationJob>(`${BASE}/scenes/${id}/regenerate`, json({})),
 
   getEpisodes: (storyId: string) => req<Episode[]>(`${BASE}/episodes/story/${storyId}`),
+  getGallery: () => req<GalleryItem[]>(`${BASE}/gallery`),
+  getPublicGallery: () => req<GalleryItem[]>(`${BASE}/gallery/public`),
   getJob: (jobId: string) => req<GenerationJob>(`${BASE}/jobs/${jobId}`),
   getEntityJobs: (type: string, id: string) => req<GenerationJob[]>(`${BASE}/jobs/entity/${type}/${id}`),
 };

@@ -5,6 +5,7 @@ from db.connection import get_pool
 from pipeline.character_gen import generate_character_references, get_character_embedding
 from pipeline.job_runtime import update_job
 from pipeline.scene_gen import generate_scene_clip
+from pipeline.narrated_image_story import generate_narrated_scene_image
 
 
 async def run_character_ref_job(character_id: str, job_id: str, worker_id: str):
@@ -77,6 +78,7 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
         story = await pool.fetchrow("SELECT * FROM stories WHERE id=$1", episode["story_id"])
         if not story:
             raise ValueError(f"Story {episode['story_id']} not found")
+        is_narrated_image_story = story.get("workflow_type") == "narrated_image_story"
 
         plan = story["episode_plan"]
         if isinstance(plan, str):
@@ -106,6 +108,9 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
                 "location": (meta or {}).get("location", ""),
                 "action": (meta or {}).get("action", ""),
                 "characters_present": (meta or {}).get("characters_present", []),
+                "narration": (meta or {}).get("narration", ""),
+                "duration_seconds": (meta or {}).get("duration_seconds", scene.get("duration")),
+                "media_kind": (meta or {}).get("media_kind", "image" if story.get("workflow_type") == "narrated_image_story" else "video"),
             }
 
         characters = await pool.fetch(
@@ -122,35 +127,68 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
                 char_refs.extend(refs)
         char_refs = char_refs[:4]
 
-        await update_job(pool, job_id, current_step="Generating new video clip")
-        result = await generate_scene_clip(
-            story_id=str(story["id"]),
-            episode_id=str(episode["id"]),
-            scene=scene_plan,
-            story_context=plan,
-            character_refs=char_refs,
-            previous_exit_frame_url=None,
-            previous_scene_summary="",
-            style=story["style"],
-        )
+        if is_narrated_image_story:
+            await update_job(pool, job_id, current_step="Generating new image scene")
+            result = await generate_narrated_scene_image(
+                story_id=str(story["id"]),
+                episode_id=str(episode["id"]),
+                scene=scene_plan,
+                story_context=plan,
+                character_refs=char_refs,
+                previous_scene_image_url=None,
+                previous_scene_summary="",
+                style=story["style"],
+            )
+        else:
+            await update_job(pool, job_id, current_step="Generating new video clip")
+            result = await generate_scene_clip(
+                story_id=str(story["id"]),
+                episode_id=str(episode["id"]),
+                scene=scene_plan,
+                story_context=plan,
+                character_refs=char_refs,
+                previous_exit_frame_url=None,
+                previous_scene_summary="",
+                style=story["style"],
+            )
 
         existing_meta = scene["generation_metadata"]
         if isinstance(existing_meta, str):
             existing_meta = json.loads(existing_meta) if existing_meta else {}
-        merged = {**(existing_meta or {}), "visual_prompt": result["prompt"], "refs_used": result.get("refs_used", 0)}
+        merged = {
+            **(existing_meta or {}),
+            "visual_prompt": result["prompt"],
+            "refs_used": result.get("refs_used", 0),
+            "media_kind": result.get("media_kind", "image" if is_narrated_image_story else "video"),
+            "narration": result.get("narration", ""),
+        }
         regen_count = (scene.get("regeneration_count") or 0) + 1
-        await pool.execute(
-            """UPDATE scenes SET clip_url=$1, exit_frame_url=$2, duration=$3,
-               status='completed', approval_status='pending',
-               generation_metadata=$4::jsonb, regeneration_count=$5, updated_at=now()
-               WHERE id=$6""",
-            result["clip_url"],
-            result.get("exit_frame_url"),
-            result.get("duration", 5.0),
-            json.dumps(merged),
-            regen_count,
-            scene_id,
-        )
+        if is_narrated_image_story:
+            await pool.execute(
+                """UPDATE scenes SET image_url=$1, clip_url=NULL, exit_frame_url=$2, duration=$3,
+                   status='completed', approval_status='pending',
+                   generation_metadata=$4::jsonb, regeneration_count=$5, updated_at=now()
+                   WHERE id=$6""",
+                result["image_url"],
+                result.get("exit_frame_url"),
+                result.get("duration", 6.0),
+                json.dumps(merged),
+                regen_count,
+                scene_id,
+            )
+        else:
+            await pool.execute(
+                """UPDATE scenes SET clip_url=$1, exit_frame_url=$2, duration=$3,
+                   status='completed', approval_status='pending',
+                   generation_metadata=$4::jsonb, regeneration_count=$5, updated_at=now()
+                   WHERE id=$6""",
+                result["clip_url"],
+                result.get("exit_frame_url"),
+                result.get("duration", 5.0),
+                json.dumps(merged),
+                regen_count,
+                scene_id,
+            )
         await update_job(
             pool,
             job_id,
@@ -158,7 +196,11 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
             progress=1,
             current_step="Done",
             completed_at=datetime.utcnow(),
-            result={"scene_id": scene_id, "clip_url": result["clip_url"]},
+            result={
+                "scene_id": scene_id,
+                "clip_url": result.get("clip_url"),
+                "image_url": result.get("image_url"),
+            },
         )
     except Exception as e:
         print(f"[scenes] Regen failed for {scene_id}: {e}")

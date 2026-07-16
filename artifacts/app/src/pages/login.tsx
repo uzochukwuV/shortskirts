@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
-import { Sparkles, Loader2 } from "lucide-react";
+import { BadgeCheck, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,67 +32,109 @@ export default function Login() {
   }
 
   return (
-    <main className="min-h-screen bg-gray-50 flex items-center justify-center px-4 py-10">
-      <Card className="w-full max-w-md border-gray-200 shadow-sm">
-        <CardHeader className="space-y-4">
-          <div className="flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-600">
-              <Sparkles className="h-5 w-5 text-white" />
-            </div>
-            <span className="font-semibold text-gray-900">StoryForge</span>
+    <main className="min-h-screen bg-background px-4 py-10">
+      <div className="mx-auto grid w-full max-w-[1100px] gap-6 lg:grid-cols-[1.05fr_0.95fr]">
+        <section className="rounded-[36px] border border-border bg-white p-8 md:p-10">
+          <div className="inline-flex items-center gap-2 rounded-[12px] border border-border bg-muted px-3 py-1 text-[12px] font-medium text-foreground">
+            <BadgeCheck className="h-3.5 w-3.5 text-[color:#ff5a00]" />
+            Protected workspace
           </div>
-          <div>
-            <CardTitle>{mode === "login" ? "Sign in" : "Create your workspace"}</CardTitle>
-            <CardDescription>
-              {mode === "login"
-                ? "Access your productions, bibles, and generated media."
-                : "Start a private workspace for your AI video pipeline."}
-            </CardDescription>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={submit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                autoComplete="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
+
+          <div className="mt-8 flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-[14px] bg-foreground text-background">
+              <Sparkles className="h-5 w-5" />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                autoComplete={mode === "login" ? "current-password" : "new-password"}
-                minLength={8}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
+            <div>
+              <div className="text-lg font-semibold text-foreground">StoryForge</div>
+              <div className="text-sm text-muted-foreground">Series engine</div>
             </div>
-            {error && <p className="text-sm text-red-600">{error}</p>}
-            <Button type="submit" className="w-full bg-gray-900 hover:bg-gray-700" disabled={loading}>
-              {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {mode === "login" ? "Sign in" : "Create account"}
-            </Button>
-          </form>
-          <div className="mt-5 text-center text-sm text-gray-500">
-            {mode === "login" ? "New to StoryForge?" : "Already have an account?"}{" "}
-            <button
-              type="button"
-              className="font-medium text-violet-600 hover:text-violet-700"
-              onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); }}
-            >
-              {mode === "login" ? "Create an account" : "Sign in"}
-            </button>
           </div>
-        </CardContent>
-      </Card>
+
+          <h1 className="mt-8 max-w-xl text-4xl font-semibold leading-[1.08] text-foreground md:text-5xl">
+            {mode === "login" ? "Sign in to your production workspace" : "Create your workspace"}
+          </h1>
+          <p className="mt-4 max-w-xl text-[15px] leading-7 text-muted-foreground">
+            {mode === "login"
+              ? "Access your productions, approvals, and generated media."
+              : "Set up a private workspace for briefs, outlines, approvals, and renders."}
+          </p>
+
+          <div className="mt-8 grid gap-3 sm:grid-cols-3">
+            {[
+              "One brief to outline",
+              "Outline to scenes",
+              "Scenes to export",
+            ].map((item) => (
+              <div key={item} className="rounded-[24px] border border-border bg-background px-4 py-3 text-sm text-foreground">
+                {item}
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <Card className="border-border">
+          <CardHeader className="space-y-4">
+            <div className="inline-flex w-fit items-center gap-2 rounded-[12px] border border-border bg-muted px-3 py-1 text-[12px] font-medium text-foreground">
+              <span className="h-1.5 w-1.5 rounded-full bg-[color:#ff5a00]" />
+              {mode === "login" ? "Welcome back" : "Start here"}
+            </div>
+            <div>
+              <CardTitle>{mode === "login" ? "Sign in" : "Create an account"}</CardTitle>
+              <CardDescription>
+                {mode === "login"
+                  ? "Access your productions, bibles, and generated media."
+                  : "Start a private workspace for your AI video pipeline."}
+              </CardDescription>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={submit} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="password">Password</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  autoComplete={mode === "login" ? "current-password" : "new-password"}
+                  minLength={8}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                />
+              </div>
+              {error && <p className="text-sm text-destructive">{error}</p>}
+              <Button type="submit" className="w-full" disabled={loading}>
+                {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {mode === "login" ? "Sign in" : "Create account"}
+              </Button>
+            </form>
+
+            <div className="mt-5 text-center text-sm text-muted-foreground">
+              {mode === "login" ? "New to StoryForge?" : "Already have an account?"}{" "}
+              <button
+                type="button"
+                className="font-medium text-foreground hover:underline"
+                onClick={() => {
+                  setMode(mode === "login" ? "register" : "login");
+                  setError("");
+                }}
+              >
+                {mode === "login" ? "Create an account" : "Sign in"}
+              </button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </main>
   );
 }

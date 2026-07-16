@@ -8,6 +8,7 @@ from routes.stories    import router as stories_router
 from routes.characters import router as characters_router
 from routes.episodes   import router as episodes_router
 from routes.scenes     import router as scenes_router
+from routes.gallery    import router as gallery_router
 from routes.bibles     import router as bibles_router
 from routes.jobs       import router as jobs_router
 from auth              import router as auth_router
@@ -40,6 +41,7 @@ app.include_router(stories_router)
 app.include_router(characters_router)
 app.include_router(episodes_router)
 app.include_router(scenes_router)
+app.include_router(gallery_router)
 app.include_router(bibles_router)
 app.include_router(jobs_router)
 
@@ -55,7 +57,7 @@ async def root():
         "service": "StoryForge Anime Pipeline",
         "version": "2.0.0",
         "features": [
-            "workflow_types: creator_series|brand_campaign|social_short|educational|game_lore",
+            "workflow_types: creator_series|brand_campaign|social_short|educational|game_lore|narrated_image_story",
             "approval_gates: outline, characters, scenes",
             "granular_regeneration: per-scene, per-character-refs",
             "brand_bibles: brand|character|world|campaign memory",
@@ -93,6 +95,9 @@ async def root():
             "episodes": [
                 "GET    /pipeline/episodes/story/{story_id}",
                 "GET    /pipeline/episodes/{id}",
+            ],
+            "gallery": [
+                "GET    /pipeline/gallery",
             ],
             "jobs": [
                 "GET    /pipeline/jobs/{id}",

@@ -55,24 +55,24 @@ function PipelinePanel({ job, completedScenes, totalScenes }: {
   const pct = job.total_steps > 0 ? Math.round((job.progress / job.total_steps) * 100) : 0;
 
   return (
-    <div className="mt-5 rounded-xl border border-blue-200 bg-blue-50 overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-blue-200 bg-blue-100/50">
+    <div className="mt-5 rounded-xl border border-border bg-muted overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/60">
         <div className="flex items-center gap-2">
           <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute h-full w-full rounded-full bg-blue-400 opacity-75" />
-            <span className="relative rounded-full h-2 w-2 bg-blue-500" />
+            <span className="animate-ping absolute h-full w-full rounded-full bg-[color:#ff5a00] opacity-75" />
+            <span className="relative rounded-full h-2 w-2 bg-foreground" />
           </span>
-          <span className="text-xs font-semibold text-blue-700 uppercase tracking-wider">Pipeline Active</span>
+          <span className="text-xs font-semibold text-foreground uppercase tracking-wider">Pipeline Active</span>
         </div>
-        <div className="flex items-center gap-4 text-xs text-blue-600">
+        <div className="flex items-center gap-4 text-xs text-foreground">
           <span className="flex items-center gap-1"><Clock className="h-3 w-3" /> {fmt(elapsed)}</span>
           <span className="font-bold">{pct}%</span>
         </div>
       </div>
 
       <div className="px-4 pt-3">
-        <Progress value={pct} className="h-1.5 bg-blue-200" />
-        <p className="text-xs text-blue-600 mt-1.5 font-mono truncate">{job.current_step || "Initialising…"}</p>
+        <Progress value={pct} className="h-1.5 bg-border" />
+        <p className="text-xs text-foreground mt-1.5 font-mono truncate">{job.current_step || "Initialising…"}</p>
       </div>
 
       <div className="px-4 pb-4 pt-3 grid grid-cols-5 gap-1">
@@ -83,20 +83,20 @@ function PipelinePanel({ job, completedScenes, totalScenes }: {
           return (
             <div key={stage.id} className="flex flex-col items-center gap-1.5">
               <div className="flex items-center w-full">
-                {idx > 0 && <div className={`flex-1 h-px ${done || all ? "bg-blue-500" : "bg-blue-200"}`} />}
+                {idx > 0 && <div className={`flex-1 h-px ${done || all ? "bg-foreground" : "bg-border"}`} />}
                 <div className={`flex items-center justify-center w-7 h-7 rounded-full border transition-all ${
-                  all || done ? "bg-blue-500 border-blue-500 text-white"
-                  : active    ? "bg-white border-blue-400 text-blue-500 ring-2 ring-blue-300"
-                              : "bg-white border-blue-200 text-blue-300"
+                  all || done ? "bg-foreground border-border text-white"
+                  : active    ? "bg-white border-border text-[color:#ff5a00] ring-2 ring-border"
+                              : "bg-white border-border text-muted-foreground"
                 }`}>
                   {active ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   : done || all ? <CheckCircle2 className="h-3.5 w-3.5" />
                   : <Circle className="h-3.5 w-3.5" />}
                 </div>
-                {idx < STAGES.length - 1 && <div className={`flex-1 h-px ${done || all ? "bg-blue-500" : "bg-blue-200"}`} />}
+                {idx < STAGES.length - 1 && <div className={`flex-1 h-px ${done || all ? "bg-foreground" : "bg-border"}`} />}
               </div>
               <span className={`text-[9px] font-semibold uppercase tracking-wider text-center ${
-                active ? "text-blue-600" : done || all ? "text-blue-500" : "text-blue-300"
+                active ? "text-foreground" : done || all ? "text-[color:#ff5a00]" : "text-muted-foreground"
               }`}>{stage.label}</span>
             </div>
           );
@@ -104,12 +104,12 @@ function PipelinePanel({ job, completedScenes, totalScenes }: {
       </div>
 
       {(currentStage === "scenes" || currentStage === "assembly") && totalScenes > 0 && (
-        <div className="px-4 py-3 border-t border-blue-200 bg-blue-100/30 flex justify-between text-xs text-blue-600">
+        <div className="px-4 py-3 border-t border-border bg-muted/40 flex justify-between text-xs text-foreground">
           <span>Scenes Rendered</span>
           <div className="flex items-center gap-2">
             <div className="flex gap-1">
               {Array.from({ length: totalScenes }).map((_, i) => (
-                <div key={i} className={`h-1.5 w-5 rounded-full ${i < completedScenes ? "bg-blue-500" : "bg-blue-200"}`} />
+                <div key={i} className={`h-1.5 w-5 rounded-full ${i < completedScenes ? "bg-foreground" : "bg-border"}`} />
               ))}
             </div>
             <span className="font-bold">{completedScenes}/{totalScenes}</span>
@@ -146,7 +146,7 @@ function ApprovalGate({ story, onApprove, isApproving }: {
                 <div className="flex flex-wrap gap-2">
                   {plan.characters.map((c: any) => (
                     <span key={c.name} className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-gray-200 rounded-full text-xs text-gray-600">
-                      <User className="h-3 w-3 text-violet-400" /> {c.name}
+                      <User className="h-3 w-3 text-[color:#ff5a00]" /> {c.name}
                       <span className="text-gray-400">· {c.role}</span>
                     </span>
                   ))}
@@ -198,8 +198,9 @@ function SceneCard({ scene, story, onRegenerate, onApprove, onReject, onLock }: 
   onLock: () => void;
 }) {
   const isGenerating = scene.status === "running";
-  const hasVideo = !!(scene.video_url || scene.clip_url);
-  const videoSrc = scene.video_url || scene.clip_url;
+  const hasMedia = !!(scene.image_url || scene.video_url || scene.clip_url);
+  const mediaSrc = scene.image_url || scene.video_url || scene.clip_url;
+  const mediaKind = scene.media_kind || (scene.image_url ? "image" : "video");
 
   return (
     <div className={`border rounded-xl overflow-hidden bg-white transition-all ${
@@ -262,7 +263,7 @@ function SceneCard({ scene, story, onRegenerate, onApprove, onReject, onLock }: 
             </div>
           )}
           {/* Action buttons */}
-          {hasVideo && !scene.locked && (
+          {hasMedia && !scene.locked && (
             <div className="pt-2 flex flex-wrap gap-2">
               <Button size="sm" variant="outline"
                 onClick={onApprove}
@@ -294,17 +295,21 @@ function SceneCard({ scene, story, onRegenerate, onApprove, onReject, onLock }: 
           )}
         </div>
 
-        {/* Right: video */}
+        {/* Right: media */}
         <div className="p-4 flex flex-col justify-center items-center bg-gray-50 min-h-[200px] relative group">
           {isGenerating ? (
             <div className="flex flex-col items-center gap-2 text-gray-400">
-              <Loader2 className="h-8 w-8 animate-spin text-violet-400" />
+              <Loader2 className="h-8 w-8 animate-spin text-[color:#ff5a00]" />
               <span className="text-xs">Regenerating…</span>
             </div>
-          ) : hasVideo ? (
+          ) : hasMedia ? (
             <>
-              <video src={videoSrc} controls className="w-full rounded-lg max-h-[220px] object-contain" />
-              <a href={videoSrc} download
+              {mediaKind === "image" ? (
+                <img src={mediaSrc} alt={scene.title || `Scene ${scene.scene_number}`} className="w-full rounded-lg max-h-[220px] object-contain bg-white" />
+              ) : (
+                <video src={mediaSrc} controls className="w-full rounded-lg max-h-[220px] object-contain" />
+              )}
+              <a href={mediaSrc} download
                 className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity bg-white border border-gray-200 text-gray-600 hover:text-gray-900 p-1.5 rounded-lg shadow-sm">
                 <Download className="h-3.5 w-3.5" />
               </a>
@@ -320,7 +325,7 @@ function SceneCard({ scene, story, onRegenerate, onApprove, onReject, onLock }: 
               <span className="text-xs">No render yet</span>
               {!scene.locked && (
                 <Button size="sm" variant="outline" onClick={onRegenerate}
-                  className="mt-2 h-7 text-xs border-violet-200 text-violet-600 hover:bg-violet-50 rounded-lg">
+                  className="mt-2 h-7 text-xs border-border text-foreground hover:bg-muted rounded-lg">
                   <RotateCcw className="h-3 w-3 mr-1" /> Generate this scene
                 </Button>
               )}
@@ -369,7 +374,7 @@ function CharacterCard({ char, onApprove, onLock, onRegenRefs }: {
       <div className="p-4">
         <div className="flex items-start justify-between mb-1">
           <h3 className="font-semibold text-gray-900">{char.name}</h3>
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-violet-500 bg-violet-50 border border-violet-200 px-2 py-0.5 rounded-full">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-[color:#ff5a00] bg-muted border border-border px-2 py-0.5 rounded-full">
             {char.role}
           </span>
         </div>
@@ -522,14 +527,14 @@ export default function StoryDetail() {
   }, [episodes, activeEp]);
 
   const allScenes = episodes?.flatMap(e => e.scenes ?? []) ?? [];
-  const completedScenes = allScenes.filter(s => s.video_url || s.clip_url).length;
+  const completedScenes = allScenes.filter(s => s.image_url || s.video_url || s.clip_url).length;
   const displayJob = liveJob ?? activeJob;
 
   if (loadingStory) {
     return (
       <Layout>
         <div className="container p-8 flex justify-center">
-          <Loader2 className="h-6 w-6 animate-spin text-violet-500" />
+          <Loader2 className="h-6 w-6 animate-spin text-[color:#ff5a00]" />
         </div>
       </Layout>
     );
@@ -539,8 +544,8 @@ export default function StoryDetail() {
 
   const statusColor: Record<string, string> = {
     draft:      "bg-amber-50 text-amber-700 border-amber-200",
-    approved:   "bg-blue-50 text-blue-700 border-blue-200",
-    generating: "bg-violet-50 text-violet-700 border-violet-200",
+    approved:   "bg-blue-50 text-foreground border-border",
+    generating: "bg-muted text-foreground border-border",
     completed:  "bg-green-50 text-green-700 border-green-200",
     ready:      "bg-green-50 text-green-700 border-green-200",
     failed:     "bg-red-50 text-red-700 border-red-200",
@@ -552,7 +557,7 @@ export default function StoryDetail() {
       <div className="border-b border-gray-100 bg-white">
         <div className="container px-4 md:px-6 py-5 max-w-7xl mx-auto">
           <div className="flex items-center gap-2 text-sm text-gray-400 mb-4">
-            <Link href="/dashboard" className="hover:text-violet-600 flex items-center transition-colors">
+            <Link href="/dashboard" className="hover:text-foreground flex items-center transition-colors">
               <ChevronLeft className="h-4 w-4 mr-0.5" /> Dashboard
             </Link>
             <span>/</span>
@@ -657,13 +662,13 @@ export default function StoryDetail() {
                   <div className="space-y-1">
                     {episodes.map(ep => {
                       const epScenes = ep.scenes ?? [];
-                      const rendered = epScenes.filter(s => s.video_url || s.clip_url).length;
+                      const rendered = epScenes.filter(s => s.image_url || s.video_url || s.clip_url).length;
                       const approved = epScenes.filter(s => s.approval_status === "approved").length;
                       return (
                         <button key={ep.id} onClick={() => setActiveEp(ep.id)}
                           className={`w-full text-left px-3 py-3 rounded-xl border transition-all ${
                             activeEp === ep.id
-                              ? "bg-violet-50 border-violet-200 text-violet-700"
+                              ? "bg-muted border-border text-foreground"
                               : "border-transparent text-gray-600 hover:bg-gray-50 hover:border-gray-200"
                           }`}>
                           <div className="text-[10px] font-mono uppercase text-gray-400 mb-0.5">Episode {ep.episode_number}</div>
@@ -673,7 +678,7 @@ export default function StoryDetail() {
                               {epScenes.map((sc, i) => (
                                 <div key={i} className={`h-1 flex-1 rounded-full ${
                                   sc.approval_status === "approved" ? "bg-green-400" :
-                                  sc.video_url || sc.clip_url ? "bg-violet-400" : "bg-gray-200"
+                                  sc.image_url || sc.video_url || sc.clip_url ? "bg-[color:#ff5a00]" : "bg-gray-200"
                                 }`} />
                               ))}
                             </div>
@@ -699,7 +704,7 @@ export default function StoryDetail() {
                           {ep.summary && <p className="text-sm text-gray-500 leading-relaxed">{ep.summary}</p>}
                           {ep.assembled_video_url && (
                             <a href={ep.assembled_video_url} target="_blank" rel="noreferrer"
-                              className="inline-flex items-center gap-2 mt-3 text-sm font-medium text-violet-600 hover:text-violet-700">
+                              className="inline-flex items-center gap-2 mt-3 text-sm font-medium text-foreground hover:text-foreground">
                               <Play className="h-4 w-4" /> Watch assembled episode
                             </a>
                           )}
@@ -750,19 +755,19 @@ export default function StoryDetail() {
             {story.episode_plan ? (
               <div className="bg-white border border-gray-200 rounded-2xl p-6 md:p-8 space-y-8 max-w-3xl">
                 <div>
-                  <h3 className="text-xs font-semibold uppercase tracking-widest text-violet-500 mb-2">Synopsis</h3>
+                  <h3 className="text-xs font-semibold uppercase tracking-widest text-[color:#ff5a00] mb-2">Synopsis</h3>
                   <p className="text-gray-700 leading-relaxed text-base">{story.episode_plan.synopsis}</p>
                 </div>
                 <div className="border-t border-gray-100 pt-6">
-                  <h3 className="text-xs font-semibold uppercase tracking-widest text-violet-500 mb-2">Setting</h3>
+                  <h3 className="text-xs font-semibold uppercase tracking-widest text-[color:#ff5a00] mb-2">Setting</h3>
                   <p className="text-gray-700 leading-relaxed">{story.episode_plan.setting}</p>
                 </div>
                 {story.episode_plan.themes?.length > 0 && (
                   <div className="border-t border-gray-100 pt-6">
-                    <h3 className="text-xs font-semibold uppercase tracking-widest text-violet-500 mb-3">Themes</h3>
+                    <h3 className="text-xs font-semibold uppercase tracking-widest text-[color:#ff5a00] mb-3">Themes</h3>
                     <div className="flex flex-wrap gap-2">
                       {story.episode_plan.themes.map((t: string, i: number) => (
-                        <span key={i} className="px-3 py-1 bg-violet-50 border border-violet-200 text-violet-700 text-sm rounded-full">
+                        <span key={i} className="px-3 py-1 bg-muted border border-border text-foreground text-sm rounded-full">
                           {t}
                         </span>
                       ))}
@@ -771,7 +776,7 @@ export default function StoryDetail() {
                 )}
                 {story.episode_plan.episodes?.map((ep: any) => (
                   <div key={ep.episode_number} className="border-t border-gray-100 pt-6">
-                    <h3 className="text-xs font-semibold uppercase tracking-widest text-violet-500 mb-2">
+                    <h3 className="text-xs font-semibold uppercase tracking-widest text-[color:#ff5a00] mb-2">
                       Episode {ep.episode_number}: {ep.title}
                     </h3>
                     <p className="text-sm text-gray-600 mb-3">{ep.summary}</p>

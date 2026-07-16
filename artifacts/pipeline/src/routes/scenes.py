@@ -44,6 +44,7 @@ def _row_to_scene(r, metadata: dict | None = None) -> SceneResponse:
         scene_number=r["scene_number"],
         prompt=r["prompt"],
         clip_url=r["clip_url"],
+        image_url=r.get("image_url"),
         exit_frame_url=r["exit_frame_url"],
         duration=r["duration"],
         status=r["status"],
@@ -56,6 +57,8 @@ def _row_to_scene(r, metadata: dict | None = None) -> SceneResponse:
         visual_prompt=metadata.get("visual_prompt") or r["prompt"],
         mood=metadata.get("mood", ""),
         location=metadata.get("location", ""),
+        narration=metadata.get("narration", ""),
+        media_kind=metadata.get("media_kind") or ("image" if r.get("image_url") else "video"),
     )
 
 

@@ -43,7 +43,7 @@ const WORKFLOWS: WFConfig[] = [
     defaultGenre: "action", defaultStyle: "anime", defaultEpisodes: 3, defaultScenes: 5,
     promptLabel: "Story Premise",
     promptHint: "A rogue mech pilot discovers an ancient civilization beneath the megacity…",
-    color: "text-violet-600", bg: "bg-violet-50",
+    color: "text-foreground", bg: "bg-muted",
   },
   {
     id: "brand_campaign",
@@ -53,7 +53,7 @@ const WORKFLOWS: WFConfig[] = [
     defaultGenre: "slice-of-life", defaultStyle: "modern-anime", defaultEpisodes: 1, defaultScenes: 3,
     promptLabel: "Product / Service Brief",
     promptHint: "EcoRun sneakers — sustainable running shoes for urban athletes. Target: 25–35 active city dwellers. CTA: Shop now at ecorun.com",
-    color: "text-blue-600", bg: "bg-blue-50",
+    color: "text-foreground", bg: "bg-muted",
   },
   {
     id: "social_short",
@@ -63,7 +63,7 @@ const WORKFLOWS: WFConfig[] = [
     defaultGenre: "action", defaultStyle: "modern-anime", defaultEpisodes: 1, defaultScenes: 3,
     promptLabel: "Content Hook",
     promptHint: "3 signs you're training wrong — fitness myth-busting series, energetic anime style, fast cuts",
-    color: "text-emerald-600", bg: "bg-emerald-50",
+    color: "text-foreground", bg: "bg-muted",
   },
   {
     id: "educational",
@@ -73,7 +73,7 @@ const WORKFLOWS: WFConfig[] = [
     defaultGenre: "slice-of-life", defaultStyle: "anime", defaultEpisodes: 1, defaultScenes: 5,
     promptLabel: "Topic / Lesson Brief",
     promptHint: "How neural networks learn — explain backpropagation to high school students using a curious robot character",
-    color: "text-amber-600", bg: "bg-amber-50",
+    color: "text-foreground", bg: "bg-muted",
   },
   {
     id: "game_lore",
@@ -83,7 +83,17 @@ const WORKFLOWS: WFConfig[] = [
     defaultGenre: "fantasy", defaultStyle: "anime", defaultEpisodes: 1, defaultScenes: 4,
     promptLabel: "IP / World Brief",
     promptHint: "Aethermoor — a dying world where rogue AIs and ancient dragons battle for control of the last mana wells",
-    color: "text-rose-600", bg: "bg-rose-50",
+    color: "text-foreground", bg: "bg-muted",
+  },
+  {
+    id: "narrated_image_story",
+    icon: <Clapperboard className="h-5 w-5" />,
+    label: "Narrated Image Story",
+    tagline: "Still images with narration and character continuity",
+    defaultGenre: "drama", defaultStyle: "anime", defaultEpisodes: 1, defaultScenes: 6,
+    promptLabel: "Story Brief",
+    promptHint: "A detective retraces a missing person's final day using recurring character references.",
+    color: "text-foreground", bg: "bg-muted",
   },
 ];
 
@@ -132,7 +142,7 @@ function StepWorkflow({ form, set }: { form: FormData; set: (p: Partial<FormData
           }}
           className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-all ${
             form.workflow === wf.id
-              ? "border-violet-400 bg-violet-50 shadow-sm"
+              ? "border-border bg-muted shadow-sm"
               : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
           }`}
         >
@@ -143,7 +153,7 @@ function StepWorkflow({ form, set }: { form: FormData; set: (p: Partial<FormData
             </div>
             <div className="text-xs text-gray-400 truncate">{wf.tagline}</div>
           </div>
-          {form.workflow === wf.id && <CheckCircle2 className="h-4 w-4 text-violet-500 shrink-0" />}
+          {form.workflow === wf.id && <CheckCircle2 className="h-4 w-4 text-[color:#ff5a00] shrink-0" />}
         </button>
       ))}
     </div>
@@ -164,7 +174,7 @@ function StepBrief({ form, set }: { form: FormData; set: (p: Partial<FormData>) 
           value={form.title}
           onChange={e => set({ title: e.target.value })}
           placeholder="e.g. Project Aethermoor"
-          className="h-10 border-gray-200 focus:border-violet-400"
+          className="h-10 border-gray-200 focus:border-border"
         />
       </div>
       <div className="space-y-1.5">
@@ -173,7 +183,7 @@ function StepBrief({ form, set }: { form: FormData; set: (p: Partial<FormData>) 
           value={form.prompt}
           onChange={e => set({ prompt: e.target.value })}
           placeholder={wf.promptHint}
-          className="h-28 resize-none border-gray-200 focus:border-violet-400 text-sm"
+          className="h-28 resize-none border-gray-200 focus:border-border text-sm"
         />
         <p className="text-xs text-gray-400">Qwen will expand this into a full plan using the {wf.label} template.</p>
       </div>
@@ -191,28 +201,28 @@ function StepScale({ form, set }: { form: FormData; set: (p: Partial<FormData>) 
           <Label className="text-sm font-medium text-gray-700">
             {wf.id === "brand_campaign" ? "Ad Concepts (Episodes)" : "Episodes to Plan"}
           </Label>
-          <span className="text-sm font-bold text-violet-600">{form.num_episodes}</span>
+          <span className="text-sm font-bold text-foreground">{form.num_episodes}</span>
         </div>
         <input type="range" min={1} max={5} value={form.num_episodes}
           onChange={e => set({ num_episodes: +e.target.value })}
-          className="w-full accent-violet-600" />
+          className="w-full accent-foreground" />
         <div className="flex justify-between text-xs text-gray-400"><span>1</span><span>5</span></div>
       </div>
       <div className="space-y-3">
         <div className="flex justify-between items-center">
           <Label className="text-sm font-medium text-gray-700">
-            {wf.id === "brand_campaign" ? "Scenes per Ad" : "Scenes per Episode"}
+            {wf.id === "brand_campaign" ? "Scenes per Ad" : wf.id === "narrated_image_story" ? "Scenes per Story" : "Scenes per Episode"}
           </Label>
-          <span className="text-sm font-bold text-violet-600">{form.num_scenes}</span>
+          <span className="text-sm font-bold text-foreground">{form.num_scenes}</span>
         </div>
         <input type="range" min={3} max={10} value={form.num_scenes}
           onChange={e => set({ num_scenes: +e.target.value })}
-          className="w-full accent-violet-600" />
+          className="w-full accent-foreground" />
         <div className="flex justify-between text-xs text-gray-400"><span>3</span><span>10</span></div>
       </div>
       <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-2 text-sm">
         <div className="flex justify-between text-gray-500">
-          <span>Total clips to render</span>
+          <span>{wf.id === "narrated_image_story" ? "Total images to render" : "Total clips to render"}</span>
           <span className="font-semibold text-gray-800">{totalClips}</span>
         </div>
         <div className="flex justify-between text-gray-500">
@@ -220,7 +230,7 @@ function StepScale({ form, set }: { form: FormData; set: (p: Partial<FormData>) 
           <span className="font-semibold text-gray-800">~{totalClips * 2}–{totalClips * 4} min</span>
         </div>
         <p className="text-xs text-gray-400 pt-1 border-t border-gray-200">
-          You'll review and approve the outline before any video renders.
+          You'll review and approve the outline before any media renders.
         </p>
       </div>
     </div>
@@ -231,7 +241,7 @@ function StepReview({ form }: { form: FormData }) {
   const wf = WORKFLOWS.find(w => w.id === form.workflow)!;
   return (
     <div className="space-y-4">
-      <div className="bg-violet-50 border border-violet-200 rounded-xl p-5 space-y-2">
+      <div className="bg-muted border border-border rounded-xl p-5 space-y-2">
         <div className={`flex items-center gap-2 text-xs font-semibold ${wf.color}`}>
           {wf.icon} {wf.label}
         </div>
@@ -252,7 +262,7 @@ function StepReview({ form }: { form: FormData }) {
         ))}
       </div>
       <div className="text-xs text-gray-400 bg-amber-50 border border-amber-200 rounded-lg p-3">
-        <strong className="text-amber-700">Approval gate:</strong> Qwen generates the plan immediately. You review and approve the outline before any video clip renders — no wasted generations.
+        <strong className="text-amber-700">Approval gate:</strong> Qwen generates the plan immediately. You review and approve the outline before any media renders — no wasted generations.
       </div>
     </div>
   );
@@ -309,12 +319,12 @@ function NewProductionDialog({ onCreated }: { onCreated: (id: string) => void })
           <div className="mt-4">
             <div className="flex gap-1 mb-2">
               {STEPS.map((_, i) => (
-                <div key={i} className={`h-1.5 flex-1 rounded-full transition-all ${i <= step ? "bg-violet-500" : "bg-gray-200"}`} />
+                <div key={i} className={`h-1.5 flex-1 rounded-full transition-all ${i <= step ? "bg-[color:#ff5a00]" : "bg-gray-200"}`} />
               ))}
             </div>
             <div className="flex justify-between text-[11px] text-gray-400">
               {STEPS.map((s, i) => (
-                <span key={s} className={i === step ? "text-violet-600 font-medium" : ""}>{s}</span>
+                <span key={s} className={i === step ? "text-foreground font-medium" : ""}>{s}</span>
               ))}
             </div>
           </div>
@@ -336,7 +346,7 @@ function NewProductionDialog({ onCreated }: { onCreated: (id: string) => void })
 
           {step < STEPS.length - 1 ? (
             <Button size="sm" onClick={() => setStep(s => s + 1)} disabled={!canNext()}
-              className="bg-violet-600 hover:bg-violet-700 text-white px-5 rounded-lg">
+              className="bg-foreground hover:bg-foreground/90 text-background px-5 rounded-lg">
               Continue <ChevronRight className="ml-1 h-4 w-4" />
             </Button>
           ) : (
@@ -359,8 +369,8 @@ function statusBadge(status: string) {
   const s = status === "ready" ? "completed" : status;
   switch (s) {
     case "draft":      return "bg-amber-50 text-amber-600 border-amber-200";
-    case "approved":   return "bg-blue-50 text-blue-600 border-blue-200";
-    case "generating": return "bg-violet-50 text-violet-600 border-violet-200 animate-pulse";
+    case "approved":   return "bg-muted text-foreground border-border";
+    case "generating": return "bg-muted text-foreground border-border animate-pulse";
     case "completed":  return "bg-green-50 text-green-600 border-green-200";
     case "failed":     return "bg-red-50 text-red-600 border-red-200";
     default:           return "bg-gray-100 text-gray-500 border-gray-200";
@@ -406,9 +416,9 @@ export default function Dashboard() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
             {[
               { label: "Total",            value: total,          color: "text-gray-900" },
-              { label: "Awaiting Review",  value: pendingApproval, color: "text-amber-600" },
-              { label: "In Production",    value: active,          color: "text-violet-600" },
-              { label: "Completed",        value: completed,       color: "text-green-600" },
+              { label: "Awaiting Review",  value: pendingApproval, color: "text-foreground" },
+              { label: "In Production",    value: active,          color: "text-foreground" },
+              { label: "Completed",        value: completed,       color: "text-foreground" },
             ].map(s => (
               <div key={s.label} className="bg-white border border-gray-200 rounded-xl p-4">
                 <p className="text-xs text-gray-400 mb-1">{s.label}</p>
@@ -419,12 +429,12 @@ export default function Dashboard() {
 
           {isLoading ? (
             <div className="flex justify-center items-center h-64">
-              <Loader2 className="h-6 w-6 animate-spin text-violet-500" />
+              <Loader2 className="h-6 w-6 animate-spin text-[color:#ff5a00]" />
             </div>
           ) : !stories || stories.length === 0 ? (
             <div className="text-center py-24 border border-dashed border-gray-200 rounded-2xl bg-gray-50">
-              <div className="w-12 h-12 rounded-2xl bg-violet-50 flex items-center justify-center mx-auto mb-4">
-                <Clapperboard className="h-6 w-6 text-violet-500" />
+              <div className="w-12 h-12 rounded-2xl bg-muted flex items-center justify-center mx-auto mb-4">
+                <Clapperboard className="h-6 w-6 text-[color:#ff5a00]" />
               </div>
               <h3 className="text-lg font-semibold text-gray-900 mb-1">No productions yet</h3>
               <p className="text-sm text-gray-500 max-w-sm mx-auto mb-6">
@@ -438,7 +448,7 @@ export default function Dashboard() {
                 const displayStatus = story.status === "ready" ? "completed" : story.status;
                 return (
                   <Link key={story.id} href={`/stories/${story.id}`}>
-                    <div className="group bg-white border border-gray-200 hover:border-violet-300 hover:shadow-sm rounded-2xl p-5 cursor-pointer transition-all flex flex-col h-full">
+                    <div className="group bg-white border border-gray-200 hover:border-border hover:shadow-sm rounded-2xl p-5 cursor-pointer transition-all flex flex-col h-full">
                       <div className="flex items-start justify-between mb-3">
                         <Badge className={`text-[10px] font-medium border px-2 py-0.5 rounded-full ${statusBadge(story.status)}`}>
                           {displayStatus}
@@ -450,7 +460,7 @@ export default function Dashboard() {
 
                       <div className="flex items-center gap-2 mb-2">
                         {wfIcon(story.workflow_type || "creator_series")}
-                        <h3 className="font-semibold text-gray-900 group-hover:text-violet-600 transition-colors line-clamp-1 text-sm">
+                        <h3 className="font-semibold text-gray-900 group-hover:text-foreground transition-colors line-clamp-1 text-sm">
                           {story.title}
                         </h3>
                       </div>
@@ -470,7 +480,7 @@ export default function Dashboard() {
                           <Clock className="h-3 w-3" />
                           <span>{story.genre}</span>
                         </div>
-                        <ArrowRight className="h-4 w-4 text-gray-300 group-hover:text-violet-500 group-hover:translate-x-0.5 transition-all" />
+                        <ArrowRight className="h-4 w-4 text-gray-300 group-hover:text-[color:#ff5a00] group-hover:translate-x-0.5 transition-all" />
                       </div>
                     </div>
                   </Link>

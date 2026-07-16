@@ -1,45 +1,28 @@
 import { useState } from "react";
 import { Link } from "wouter";
+import { ArrowRight, CheckCircle2, Zap } from "lucide-react";
 import { Layout } from "@/components/layout";
 import { Button } from "@/components/ui/button";
-import { CheckCircle2, ArrowRight, Zap } from "lucide-react";
 
 const PLANS = [
   {
     name: "Starter",
     price: { monthly: 0, annual: 0 },
-    desc: "Try the pipeline. No credit card required.",
+    desc: "Try the pipeline with a small quota.",
     cta: "Get started free",
     highlight: false,
-    limits: "5 videos / month · 1 active series · 2 GB storage",
-    features: [
-      "All 5 workflow types",
-      "6 production templates",
-      "Qwen Cloud story planning",
-      "Wan 2.7 video generation",
-      "Character & brand memory",
-      "Backblaze B2 storage",
-      "1 approval gate per run",
-    ],
+    limits: "5 videos / month · 1 active series",
+    features: ["All workflows", "Story planning", "Video generation", "Character memory"],
   },
   {
     name: "Creator",
     price: { monthly: 29, annual: 23 },
-    desc: "For indie creators shipping weekly content.",
+    desc: "For independent creators shipping weekly.",
     cta: "Start Creator plan",
     highlight: true,
     badge: "Most popular",
-    limits: "60 videos / month · 5 active series · 50 GB storage",
-    features: [
-      "Everything in Starter",
-      "Granular scene regeneration",
-      "Per-scene approval gates",
-      "TikTok / Reels / Shorts export",
-      "Caption & post copy output",
-      "Priority render queue",
-      "Character ref swap",
-      "Tone & aspect ratio variants",
-    ],
+    limits: "60 videos / month · 5 active series",
+    features: ["Everything in Starter", "Scene regeneration", "Approval gates", "Platform exports"],
   },
   {
     name: "Studio",
@@ -47,60 +30,25 @@ const PLANS = [
     desc: "For agencies and teams producing at scale.",
     cta: "Start Studio plan",
     highlight: false,
-    limits: "300 videos / month · Unlimited series · 500 GB storage",
-    features: [
-      "Everything in Creator",
-      "Unlimited team seats",
-      "Brand bible per client",
-      "Shareable review links",
-      "Version history",
-      "Usage & cost per client",
-      "API access",
-      "Export manifests",
-      "Custom model parameters",
-    ],
+    limits: "300 videos / month · Unlimited series",
+    features: ["Everything in Creator", "Client brand bibles", "Review links", "Usage tracking"],
   },
   {
     name: "Enterprise",
     price: { monthly: null, annual: null },
-    desc: "Custom contract. SLA. Dedicated infrastructure.",
+    desc: "Custom contract and dedicated support.",
     cta: "Contact us",
     highlight: false,
-    limits: "Custom limits · Custom SLA · On-prem option",
-    features: [
-      "Everything in Studio",
-      "Dedicated render pipeline",
-      "Custom model fine-tuning",
-      "Commercial license",
-      "99.9% uptime SLA",
-      "SOC 2 compliance",
-      "Slack / email support",
-      "Onboarding call",
-    ],
+    limits: "Custom limits · Custom SLA",
+    features: ["Dedicated pipeline", "Commercial license", "SOC 2 support", "Onboarding"],
   },
 ];
 
 const FAQ = [
-  {
-    q: "What counts as a 'video'?",
-    a: "Each rendered scene clip counts as one video. An episode with 5 scenes uses 5 of your monthly quota. The assembled episode does not count separately.",
-  },
-  {
-    q: "What happens if a render fails?",
-    a: "Failed renders do not count against your quota. We retry automatically and only bill for successful generations.",
-  },
-  {
-    q: "Can I regenerate a single scene without using more quota?",
-    a: "Regeneration of a scene uses one additional quota slot. Approval-gate rejections before any render do not count.",
-  },
-  {
-    q: "Is there a long-term contract?",
-    a: "No. All plans are monthly or annual, cancel anytime. Annual plans save roughly 20%.",
-  },
-  {
-    q: "What models does StoryForge use?",
-    a: "Story planning and character prompts use Qwen Cloud (DashScope) — Qwen-Plus primary, Qwen-Turbo fallback. Video generation uses Wan 2.7 via DashScope or AIML. All media is stored in Backblaze B2.",
-  },
+  ["What counts as a video?", "Each rendered scene clip counts as one video. The assembled episode does not count separately."],
+  ["What happens if a render fails?", "Failed renders do not count against your quota. The worker retries the step automatically."],
+  ["Can I regenerate a single scene?", "Yes. Regeneration uses one slot for that scene only, not the whole episode."],
+  ["Is there a long-term contract?", "No. Monthly and annual plans can be cancelled at any time. Annual saves about 20%."],
 ];
 
 export default function Pricing() {
@@ -108,134 +56,125 @@ export default function Pricing() {
 
   return (
     <Layout>
-      <div className="bg-white min-h-screen">
+      <div className="bg-background">
+        <section className="border-b border-border">
+          <div className="mx-auto max-w-[1200px] px-4 py-16 text-center md:px-6">
+            <div className="inline-flex items-center gap-2 rounded-[12px] border border-border bg-white px-3 py-1 text-[12px] font-medium text-foreground">
+              <Zap className="h-3.5 w-3.5 text-[color:#ff5a00]" />
+              Simple, transparent pricing
+            </div>
+            <h1 className="mt-6 text-4xl font-semibold leading-tight text-foreground md:text-5xl">
+              Pricing that matches the production loop
+            </h1>
+            <p className="mx-auto mt-4 max-w-2xl text-[15px] leading-7 text-muted-foreground">
+              This is priced around recurring video production, approvals, and retries. Not seats, not exports, not vague usage buckets.
+            </p>
 
-        {/* Header */}
-        <div className="pt-16 pb-12 text-center border-b border-gray-100 bg-gradient-to-b from-violet-50/50 to-white">
-          <div className="inline-flex items-center gap-1.5 text-xs font-medium text-violet-700 bg-violet-50 border border-violet-200 rounded-full px-3 py-1 mb-6">
-            <Zap className="h-3 w-3" /> Simple, transparent pricing
+            <div className="mx-auto mt-8 inline-flex items-center rounded-[10000px] border border-border bg-white p-1">
+              <button
+                onClick={() => setAnnual(false)}
+                className={`rounded-[10000px] px-4 py-1.5 text-sm font-medium ${!annual ? "bg-foreground text-background" : "text-muted-foreground"}`}
+              >
+                Monthly
+              </button>
+              <button
+                onClick={() => setAnnual(true)}
+                className={`rounded-[10000px] px-4 py-1.5 text-sm font-medium ${annual ? "bg-foreground text-background" : "text-muted-foreground"}`}
+              >
+                Annual <span className="text-[color:#ff5a00]">-20%</span>
+              </button>
+            </div>
           </div>
-          <h1 className="text-4xl font-bold text-gray-900 mb-3">
-            Pricing that scales with your production
-          </h1>
-          <p className="text-gray-500 max-w-md mx-auto mb-8">
-            Priced per video minute generated — not per seat or per "export." No surprise bills.
-          </p>
+        </section>
 
-          {/* Toggle */}
-          <div className="inline-flex items-center bg-gray-100 rounded-full p-1 gap-1">
-            <button
-              onClick={() => setAnnual(false)}
-              className={`px-4 py-1.5 rounded-full text-sm font-medium transition-all ${!annual ? "bg-white shadow-sm text-gray-900" : "text-gray-500"}`}
-            >
-              Monthly
-            </button>
-            <button
-              onClick={() => setAnnual(true)}
-              className={`px-4 py-1.5 rounded-full text-sm font-medium transition-all ${annual ? "bg-white shadow-sm text-gray-900" : "text-gray-500"}`}
-            >
-              Annual <span className="text-violet-600 font-semibold">−20%</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Plans grid */}
-        <div className="container px-4 md:px-6 py-12 max-w-6xl mx-auto">
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-5">
-            {PLANS.map(plan => (
+        <section className="mx-auto max-w-[1200px] px-4 py-12 md:px-6">
+          <div className="grid gap-5 lg:grid-cols-4">
+            {PLANS.map((plan) => (
               <div
                 key={plan.name}
-                className={`relative rounded-2xl p-6 flex flex-col ${
-                  plan.highlight
-                    ? "bg-gray-900 border-2 border-violet-500 shadow-xl"
-                    : "bg-white border border-gray-200"
+                className={`relative flex h-full flex-col rounded-[36px] border p-7 ${
+                  plan.highlight ? "border-foreground bg-foreground text-background" : "border-border bg-white"
                 }`}
               >
                 {plan.badge && (
-                  <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-violet-600 text-white text-[10px] font-semibold uppercase tracking-widest px-3 py-1 rounded-full">
+                  <div className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-[10000px] bg-[color:#ff5a00] px-3 py-1 text-[10px] font-medium uppercase text-white">
                     {plan.badge}
                   </div>
                 )}
 
-                <div className="mb-5">
-                  <h3 className={`font-bold text-lg mb-1 ${plan.highlight ? "text-white" : "text-gray-900"}`}>
+                <div className="space-y-3">
+                  <h2 className={`text-lg font-semibold ${plan.highlight ? "text-background" : "text-foreground"}`}>
                     {plan.name}
-                  </h3>
-                  <p className={`text-sm mb-4 ${plan.highlight ? "text-gray-400" : "text-gray-500"}`}>
+                  </h2>
+                  <p className={`text-sm leading-6 ${plan.highlight ? "text-background/70" : "text-muted-foreground"}`}>
                     {plan.desc}
                   </p>
                   <div className="flex items-baseline gap-1">
                     {plan.price.monthly === null ? (
-                      <span className={`text-3xl font-bold ${plan.highlight ? "text-white" : "text-gray-900"}`}>Custom</span>
+                      <span className={`text-3xl font-semibold ${plan.highlight ? "text-background" : "text-foreground"}`}>
+                        Custom
+                      </span>
                     ) : (
                       <>
-                        <span className={`text-3xl font-bold ${plan.highlight ? "text-white" : "text-gray-900"}`}>
+                        <span className={`text-3xl font-semibold ${plan.highlight ? "text-background" : "text-foreground"}`}>
                           ${annual ? plan.price.annual : plan.price.monthly}
                         </span>
-                        <span className={`text-sm ${plan.highlight ? "text-gray-400" : "text-gray-400"}`}>/mo</span>
+                        <span className={`text-sm ${plan.highlight ? "text-background/60" : "text-muted-foreground"}`}>/mo</span>
                       </>
                     )}
                   </div>
-                  <p className={`text-[11px] mt-1 ${plan.highlight ? "text-gray-500" : "text-gray-400"}`}>
+                  <p className={`text-xs ${plan.highlight ? "text-background/60" : "text-muted-foreground"}`}>
                     {plan.limits}
                   </p>
                 </div>
 
-                <ul className="space-y-2.5 flex-1 mb-6">
-                  {plan.features.map(f => (
-                    <li key={f} className="flex items-start gap-2">
-                      <CheckCircle2 className={`h-3.5 w-3.5 mt-0.5 shrink-0 ${plan.highlight ? "text-violet-400" : "text-violet-500"}`} />
-                      <span className={`text-xs leading-relaxed ${plan.highlight ? "text-gray-300" : "text-gray-600"}`}>{f}</span>
+                <ul className="mt-6 flex-1 space-y-2.5">
+                  {plan.features.map((feature) => (
+                    <li key={feature} className="flex items-start gap-2">
+                      <CheckCircle2 className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${plan.highlight ? "text-[color:#ff5a00]" : "text-foreground"}`} />
+                      <span className={`text-xs leading-relaxed ${plan.highlight ? "text-background/80" : "text-muted-foreground"}`}>
+                        {feature}
+                      </span>
                     </li>
                   ))}
                 </ul>
 
-                <Link href={plan.name === "Enterprise" ? "/" : "/dashboard"}>
-                  <Button
-                    className={`w-full rounded-xl text-sm font-medium ${
-                      plan.highlight
-                        ? "bg-violet-600 hover:bg-violet-700 text-white"
-                        : plan.name === "Starter"
-                        ? "bg-gray-100 hover:bg-gray-200 text-gray-900"
-                        : "bg-gray-900 hover:bg-gray-700 text-white"
-                    }`}
-                  >
-                    {plan.cta} {plan.name !== "Enterprise" && <ArrowRight className="ml-2 h-3.5 w-3.5" />}
+                <Link href={plan.name === "Enterprise" ? "/" : "/dashboard"} className="mt-6">
+                  <Button className="w-full" variant={plan.highlight ? "outline" : "default"}>
+                    {plan.cta}
+                    {plan.name !== "Enterprise" && <ArrowRight className="h-4 w-4" />}
                   </Button>
                 </Link>
               </div>
             ))}
           </div>
 
-          {/* Feature comparison note */}
-          <div className="mt-10 grid md:grid-cols-3 gap-4 text-center">
+          <div className="mt-10 grid gap-4 md:grid-cols-3">
             {[
-              { label: "Free includes", value: "5 rendered videos/mo — real Qwen + Wan generation, no watermarks" },
-              { label: "All plans include", value: "Character memory, brand bibles, B2 storage, approval gates" },
-              { label: "Cancel any time", value: "Monthly billing, no contracts below Enterprise tier" },
-            ].map(n => (
-              <div key={n.label} className="bg-gray-50 border border-gray-200 rounded-xl p-4">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">{n.label}</div>
-                <p className="text-sm text-gray-600 leading-relaxed">{n.value}</p>
+              "Free tier includes real generation",
+              "All plans include memory and approvals",
+              "No long-term contract below Enterprise",
+            ].map((item) => (
+              <div key={item} className="rounded-[24px] border border-border bg-white p-4 text-sm text-foreground">
+                {item}
               </div>
             ))}
           </div>
-        </div>
+        </section>
 
-        {/* FAQ */}
-        <div className="border-t border-gray-100 bg-gray-50 py-16">
-          <div className="container px-4 md:px-6 max-w-2xl mx-auto">
-            <h2 className="text-2xl font-bold text-gray-900 text-center mb-10">Frequently asked questions</h2>
-            <div className="space-y-6">
-              {FAQ.map(item => (
-                <div key={item.q} className="border-b border-gray-200 pb-6 last:border-0 last:pb-0">
-                  <h3 className="font-semibold text-gray-900 mb-2">{item.q}</h3>
-                  <p className="text-sm text-gray-500 leading-relaxed">{item.a}</p>
+        <section className="border-t border-border bg-muted/30 py-16">
+          <div className="mx-auto max-w-3xl px-4 md:px-6">
+            <h2 className="text-center text-3xl font-semibold text-foreground">Frequently asked questions</h2>
+            <div className="mt-10 space-y-6">
+              {FAQ.map(([q, a]) => (
+                <div key={q} className="border-b border-border pb-6 last:border-0 last:pb-0">
+                  <h3 className="font-semibold text-foreground">{q}</h3>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">{a}</p>
                 </div>
               ))}
             </div>
           </div>
-        </div>
+        </section>
       </div>
     </Layout>
   );

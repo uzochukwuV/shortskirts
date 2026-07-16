@@ -7,6 +7,7 @@ from pipeline.character_gen import generate_character_references, get_character_
 from pipeline.job_runtime import update_job
 from pipeline.scene_gen import generate_scene_clip
 from pipeline.assembler import assemble_episode
+from pipeline.narrated_image_story import generate_narrated_scene_image, assemble_narrated_episode
 
 
 async def run_story_generation(story_id: str, job_id: str):
@@ -81,6 +82,8 @@ async def run_story_generation(story_id: str, job_id: str):
             char_map[char_name] = char_dict
         step += 1
 
+        is_narrated_image_story = story.get("workflow_type") == "narrated_image_story"
+
         # ── Generate scenes per episode ───────────────────────────────────────
         for ep_plan in plan.get("episodes", []):
             ep_num = ep_plan["episode_number"]
@@ -113,7 +116,11 @@ async def run_story_generation(story_id: str, job_id: str):
                 await update_job(
                     pool, job_id,
                     progress=step,
-                    current_step=f"Ep {ep_num} Scene {scene_num}: Generating clip",
+                    current_step=(
+                        f"Ep {ep_num} Scene {scene_num}: Generating image"
+                        if is_narrated_image_story
+                        else f"Ep {ep_num} Scene {scene_num}: Generating clip"
+                    ),
                 )
 
                 scene_row = await pool.fetchrow(
@@ -130,6 +137,9 @@ async def run_story_generation(story_id: str, job_id: str):
                     "location": scene_plan.get("location", ""),
                     "action": scene_plan.get("action", ""),
                     "characters_present": scene_plan.get("characters_present", []),
+                    "narration": scene_plan.get("narration", ""),
+                    "duration_seconds": scene_plan.get("duration_seconds"),
+                    "media_kind": "image" if is_narrated_image_story else "video",
                 })
 
                 if not scene_row:
@@ -167,16 +177,28 @@ async def run_story_generation(story_id: str, job_id: str):
                     )
 
                 try:
-                    result = await generate_scene_clip(
-                        story_id=story_id,
-                        episode_id=str(ep_id),
-                        scene=scene_plan,
-                        story_context=plan,
-                        character_refs=char_refs,
-                        previous_exit_frame_url=previous_exit_frame,
-                        previous_scene_summary=previous_summary,
-                        style=story["style"],
-                    )
+                    if is_narrated_image_story:
+                        result = await generate_narrated_scene_image(
+                            story_id=story_id,
+                            episode_id=str(ep_id),
+                            scene=scene_plan,
+                            story_context=plan,
+                            character_refs=char_refs,
+                            previous_scene_image_url=previous_exit_frame,
+                            previous_scene_summary=previous_summary,
+                            style=story["style"],
+                        )
+                    else:
+                        result = await generate_scene_clip(
+                            story_id=story_id,
+                            episode_id=str(ep_id),
+                            scene=scene_plan,
+                            story_context=plan,
+                            character_refs=char_refs,
+                            previous_exit_frame_url=previous_exit_frame,
+                            previous_scene_summary=previous_summary,
+                            style=story["style"],
+                        )
 
                     # Merge generation result into metadata
                     merged_meta = json.dumps({
@@ -188,27 +210,45 @@ async def run_story_generation(story_id: str, job_id: str):
                         "action": scene_plan.get("action", ""),
                         "characters_present": scene_plan.get("characters_present", []),
                         "refs_used": result.get("refs_used", 0),
+                        "narration": result.get("narration", scene_plan.get("narration", "")),
+                        "duration_seconds": result.get("duration", scene_plan.get("duration_seconds")),
+                        "media_kind": result.get("media_kind", "video"),
                     })
 
-                    await pool.execute(
-                        """UPDATE scenes SET clip_url=$1, exit_frame_url=$2, duration=$3,
-                           status='completed', generation_metadata=$4::jsonb
-                           WHERE id=$5""",
-                        result["clip_url"],
-                        result.get("exit_frame_url"),
-                        result.get("duration", 5.0),
-                        merged_meta,
-                        scene_id,
-                    )
-
-                    previous_exit_frame = result.get("exit_frame_url")
+                    if is_narrated_image_story:
+                        await pool.execute(
+                            """UPDATE scenes SET image_url=$1, clip_url=NULL, exit_frame_url=$2, duration=$3,
+                               status='completed', generation_metadata=$4::jsonb
+                               WHERE id=$5""",
+                            result["image_url"],
+                            result.get("exit_frame_url"),
+                            result.get("duration", 6.0),
+                            merged_meta,
+                            scene_id,
+                        )
+                        previous_exit_frame = result.get("exit_frame_url")
+                    else:
+                        await pool.execute(
+                            """UPDATE scenes SET clip_url=$1, exit_frame_url=$2, duration=$3,
+                               status='completed', generation_metadata=$4::jsonb
+                               WHERE id=$5""",
+                            result["clip_url"],
+                            result.get("exit_frame_url"),
+                            result.get("duration", 5.0),
+                            merged_meta,
+                            scene_id,
+                        )
+                        previous_exit_frame = result.get("exit_frame_url")
                     previous_summary = scene_plan.get("description", "")
                     completed_scenes.append({
                         "scene_number": scene_num,
-                        "clip_url": result["clip_url"],
+                        "clip_url": result.get("clip_url"),
+                        "image_url": result.get("image_url"),
+                        "media_url": result.get("image_url") or result.get("clip_url"),
                         "exit_frame_url": result.get("exit_frame_url"),
                         "duration": result.get("duration", 5.0),
                         "prompt": result["prompt"],
+                        "narration": result.get("narration"),
                     })
 
                 except Exception as e:
@@ -221,12 +261,20 @@ async def run_story_generation(story_id: str, job_id: str):
 
             if completed_scenes:
                 try:
-                    asm = await assemble_episode(
-                        story_id=story_id,
-                        episode_id=str(ep_id),
-                        episode_number=ep_num,
-                        scenes=completed_scenes,
-                    )
+                    if is_narrated_image_story:
+                        asm = await assemble_narrated_episode(
+                            story_id=story_id,
+                            episode_id=str(ep_id),
+                            episode_number=ep_num,
+                            scenes=completed_scenes,
+                        )
+                    else:
+                        asm = await assemble_episode(
+                            story_id=story_id,
+                            episode_id=str(ep_id),
+                            episode_number=ep_num,
+                            scenes=completed_scenes,
+                        )
                     await pool.execute(
                         """UPDATE episodes SET assembled_video_url=$1, manifest_url=$2, status='completed'
                            WHERE id=$3""",

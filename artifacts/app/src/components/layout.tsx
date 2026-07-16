@@ -1,46 +1,48 @@
+import type { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { Menu, Sparkles, LogOut, UserCircle2 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "./ui/sheet";
 import { useAuth } from "@/lib/auth";
 
-export function Layout({ children }: { children: React.ReactNode }) {
+const navItems = [
+  { href: "/dashboard", label: "Dashboard" },
+  { href: "/pricing", label: "Pricing" },
+];
+
+export function Layout({ children }: { children: ReactNode }) {
   const [location, setLocation] = useLocation();
   const { user, logout } = useAuth();
 
   return (
-    <div className="min-h-screen bg-white text-gray-900 flex flex-col font-sans">
-      <header className="sticky top-0 z-50 w-full border-b border-gray-100 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80">
-        <div className="container flex h-14 max-w-screen-2xl items-center gap-4 px-4 md:px-6">
-          <Link href="/" className="flex items-center gap-2 shrink-0">
-            <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-violet-600">
-              <Sparkles className="h-4 w-4 text-white" />
+    <div className="min-h-screen flex flex-col bg-background text-foreground font-sans">
+      <header className="sticky top-0 z-50 w-full border-b border-border bg-background/90 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div className="mx-auto flex h-16 max-w-[1200px] items-center gap-4 px-4 md:px-6">
+          <Link href="/" className="flex items-center gap-3 shrink-0">
+            <div className="flex h-9 w-9 items-center justify-center rounded-[14px] bg-foreground text-background">
+              <Sparkles className="h-4 w-4" />
             </div>
-            <span className="font-semibold text-gray-900 tracking-tight">StoryForge</span>
+            <div className="leading-none">
+              <div className="font-semibold text-foreground">StoryForge</div>
+              <div className="text-[11px] text-muted-foreground">Series engine</div>
+            </div>
           </Link>
 
-          <nav className="hidden md:flex items-center gap-6 text-sm ml-2">
-            {[
-              { href: "/dashboard", label: "Dashboard" },
-              { href: "/pricing", label: "Pricing" },
-            ].map((n) => (
+          <nav className="hidden md:flex items-center gap-6 text-sm ml-3">
+            {navItems.map((item) => (
               <Link
-                key={n.href}
-                href={n.href}
-                className={`transition-colors font-medium ${
-                  location.startsWith(n.href)
-                    ? "text-violet-600"
-                    : "text-gray-500 hover:text-gray-900"
-                }`}
+                key={item.href}
+                href={item.href}
+                className={`font-medium transition-colors ${location.startsWith(item.href) ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
               >
-                {n.label}
+                {item.label}
               </Link>
             ))}
             <a
               href="https://qwencloud.com"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-gray-500 hover:text-gray-900 transition-colors font-medium"
+              className="font-medium text-muted-foreground transition-colors hover:text-foreground"
             >
               Powered by Qwen
             </a>
@@ -48,30 +50,29 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
           <div className="flex-1" />
 
-          <div className="hidden md:flex items-center gap-3">
+          <div className="hidden items-center gap-3 md:flex">
             {user ? (
               <>
-                <div className="flex items-center gap-2 text-sm text-gray-500">
-                  <UserCircle2 className="h-4 w-4" />
+                <div className="max-w-[240px] truncate text-sm text-muted-foreground">
+                  <UserCircle2 className="mr-2 inline h-4 w-4 align-text-bottom" />
                   <span>{user.email}</span>
                 </div>
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="text-gray-600 hover:text-gray-900"
+                  className="text-muted-foreground hover:text-foreground"
                   onClick={async () => {
                     await logout();
                     setLocation("/");
                   }}
                 >
-                  <LogOut className="mr-2 h-4 w-4" /> Sign out
+                  <LogOut className="h-4 w-4" />
+                  Sign out
                 </Button>
               </>
             ) : (
               <Link href="/login">
-                <Button size="sm" className="bg-gray-900 hover:bg-gray-700 text-white font-medium px-4 rounded-lg text-sm">
-                  Sign in
-                </Button>
+                <Button size="sm">Sign in</Button>
               </Link>
             )}
           </div>
@@ -82,19 +83,25 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 <Menu className="h-5 w-5" />
               </Button>
             </SheetTrigger>
-            <SheetContent side="left" className="bg-white">
-              <Link href="/" className="flex items-center gap-2 mb-8">
-                <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-violet-600">
-                  <Sparkles className="h-4 w-4 text-white" />
+            <SheetContent side="left" className="bg-background">
+              <Link href="/" className="mb-8 flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-[14px] bg-foreground text-background">
+                  <Sparkles className="h-4 w-4" />
                 </div>
-                <span className="font-semibold">StoryForge</span>
+                <div className="leading-none">
+                  <div className="font-semibold text-foreground">StoryForge</div>
+                  <div className="text-[11px] text-muted-foreground">Series engine</div>
+                </div>
               </Link>
               <div className="flex flex-col gap-4 text-sm">
-                <Link href="/dashboard" className="text-gray-700 hover:text-gray-900 font-medium">Dashboard</Link>
-                <Link href="/pricing" className="text-gray-700 hover:text-gray-900 font-medium">Pricing</Link>
+                {navItems.map((item) => (
+                  <Link key={item.href} href={item.href} className="font-medium text-foreground/70 hover:text-foreground">
+                    {item.label}
+                  </Link>
+                ))}
                 {user ? (
                   <button
-                    className="text-left text-gray-700 hover:text-gray-900 font-medium"
+                    className="text-left font-medium text-foreground/70 hover:text-foreground"
                     onClick={async () => {
                       await logout();
                       setLocation("/");
@@ -103,7 +110,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     Sign out
                   </button>
                 ) : (
-                  <Link href="/login" className="text-gray-700 hover:text-gray-900 font-medium">Sign in</Link>
+                  <Link href="/login" className="font-medium text-foreground/70 hover:text-foreground">
+                    Sign in
+                  </Link>
                 )}
               </div>
             </SheetContent>
@@ -113,18 +122,18 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
       <main className="flex-1 flex flex-col">{children}</main>
 
-      <footer className="border-t border-gray-100 bg-white py-6">
-        <div className="container px-4 md:px-6 flex flex-col md:flex-row items-center justify-between gap-2 text-xs text-gray-400">
-          <div className="flex items-center gap-1.5">
-            <div className="w-4 h-4 rounded bg-violet-600 flex items-center justify-center">
-              <Sparkles className="h-2.5 w-2.5 text-white" />
+      <footer className="border-t border-border bg-background py-6">
+        <div className="mx-auto flex max-w-[1200px] flex-col items-center justify-between gap-2 px-4 text-xs text-muted-foreground md:flex-row md:px-6">
+          <div className="flex items-center gap-2">
+            <div className="flex h-5 w-5 items-center justify-center rounded-[7px] bg-foreground text-background">
+              <Sparkles className="h-2.5 w-2.5" />
             </div>
-            <span className="font-medium text-gray-500">StoryForge</span>
+            <span className="font-medium text-foreground">StoryForge</span>
           </div>
-          <span>AI Showrunner � Qwen Cloud � Wan 2.7 � Backblaze B2 � CockroachDB</span>
+          <span>AI showrunner for serialized video with Qwen, Wan, B2, and CockroachDB.</span>
           <nav className="flex gap-4">
-            <Link href="/pricing" className="hover:text-gray-600 transition-colors">Pricing</Link>
-            <Link href="/dashboard" className="hover:text-gray-600 transition-colors">Dashboard</Link>
+            <Link href="/pricing" className="transition-colors hover:text-foreground">Pricing</Link>
+            <Link href="/dashboard" className="transition-colors hover:text-foreground">Dashboard</Link>
           </nav>
         </div>
       </footer>

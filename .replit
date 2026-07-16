@@ -28,6 +28,14 @@ args = "StoryForge API"
 task = "workflow.run"
 args = "StoryForge App"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "StoryForge Worker Story"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "StoryForge Worker Media"
+
 [[workflows.workflow]]
 name = "StoryForge Pipeline"
 author = "agent"
@@ -63,6 +71,28 @@ waitForPort = 5000
 
 [workflows.workflow.metadata]
 outputType = "webview"
+
+[[workflows.workflow]]
+name = "StoryForge Worker Story"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "WORKER_WORKLOAD=story bash artifacts/pipeline/run-worker.sh"
+
+[[workflows.workflow]]
+name = "StoryForge Worker Media"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "WORKER_WORKLOAD=media bash artifacts/pipeline/run-worker.sh"
 
 [agent]
 stack = "BEST_EFFORT_FALLBACK"

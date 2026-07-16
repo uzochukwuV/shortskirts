@@ -29,7 +29,7 @@ async def generate_character_references(
     urls = []
     for i, angle in enumerate(angles):
         prompt = f"{base_prompt}, {angle}"
-        image_bytes = await _generate_image(prompt)
+        image_bytes = await generate_image_bytes(prompt)
         if image_bytes:
             key = build_key(story_id, "characters", character_id, "refs", f"ref_{i}.jpg")
             b2_url = upload_bytes(image_bytes, key, "image/jpeg")
@@ -40,7 +40,7 @@ async def generate_character_references(
     return urls
 
 
-async def _generate_image(prompt: str) -> Optional[bytes]:
+async def generate_image_bytes(prompt: str) -> Optional[bytes]:
     # Try DashScope / Qwen Cloud first
     result = await _try_dashscope_image(prompt)
     if result:
@@ -48,6 +48,10 @@ async def _generate_image(prompt: str) -> Optional[bytes]:
 
     # Fallback: AIML
     return await _try_aiml_image(prompt)
+
+
+async def _generate_image(prompt: str) -> Optional[bytes]:
+    return await generate_image_bytes(prompt)
 
 
 async def _try_dashscope_image(prompt: str) -> Optional[bytes]:

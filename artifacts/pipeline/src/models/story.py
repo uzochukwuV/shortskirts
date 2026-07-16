@@ -12,6 +12,7 @@ class WorkflowType(str, Enum):
     social_short    = "social_short"      # TikTok / Reels / Shorts vertical
     educational     = "educational"       # Animated explainer / course lesson
     game_lore       = "game_lore"         # IP bible → lore trailers / teasers
+    narrated_image_story = "narrated_image_story"  # Still-image story beats with narration
 
 
 class BibleType(str, Enum):
@@ -127,6 +128,7 @@ class SceneResponse(BaseModel):
     scene_number: int
     prompt: str
     clip_url: Optional[str] = None
+    image_url: Optional[str] = None
     exit_frame_url: Optional[str] = None
     duration: Optional[float] = None
     status: str
@@ -141,12 +143,19 @@ class SceneResponse(BaseModel):
     visual_prompt: Optional[str] = None
     mood: Optional[str] = None
     location: Optional[str] = None
+    narration: Optional[str] = None
+    media_kind: Optional[str] = None
 
     @computed_field
     @property
     def video_url(self) -> Optional[str]:
         """Alias for clip_url — matches frontend Scene.video_url field."""
         return self.clip_url
+
+    @computed_field
+    @property
+    def media_url(self) -> Optional[str]:
+        return self.image_url or self.clip_url
 
 
 # ─── Episodes ─────────────────────────────────────────────────────────────────
@@ -161,6 +170,23 @@ class EpisodeResponse(BaseModel):
     manifest_url: Optional[str] = None
     status: str
     scenes: list[SceneResponse] = []
+    created_at: datetime
+
+
+class GalleryItemResponse(BaseModel):
+    id: str
+    kind: str
+    media_kind: Optional[str] = None
+    story_id: str
+    story_title: str
+    episode_id: str
+    episode_number: int
+    scene_id: Optional[str] = None
+    scene_number: Optional[int] = None
+    title: str
+    summary: Optional[str] = None
+    media_url: str
+    duration: Optional[float] = None
     created_at: datetime
 
 

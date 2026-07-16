@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS scenes (
     scene_number INT NOT NULL,
     prompt TEXT NOT NULL,
     clip_url TEXT,
+    image_url TEXT,
     exit_frame_url TEXT,
     duration FLOAT,
     status TEXT NOT NULL DEFAULT 'pending',

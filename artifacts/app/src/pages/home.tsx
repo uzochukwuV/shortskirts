@@ -1,347 +1,435 @@
-import { motion } from "framer-motion";
+import { useMemo, useRef } from "react";
 import { Link } from "wouter";
+import { useQuery } from "@tanstack/react-query";
+import { ArrowRight, BadgeCheck, Briefcase, BookOpen, ChevronLeft, ChevronRight, Clock, Film, Gamepad2, Layers, Play, Sparkles, TrendingUp, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Layout } from "@/components/layout";
-import {
-  ArrowRight, CheckCircle2, Cpu, Film, Layers,
-  Users, Briefcase, BookOpen, Gamepad2, TrendingUp,
-  LayoutTemplate, ChevronRight, Play,
-} from "lucide-react";
+import { api, GalleryItem } from "@/lib/api";
 
-// ─── Templates data ───────────────────────────────────────────────────────────
+const ICPs = [
+  {
+    icon: Users,
+    who: "Indie creators",
+    title: "Make a series people recognize",
+    text: "Persisted characters, repeatable formats, and scene-level regeneration for weekly output.",
+  },
+  {
+    icon: Briefcase,
+    who: "Agencies",
+    title: "Move briefs through approval fast",
+    text: "Brand bibles, storyboard review, and asset reuse for multiple clients without starting over.",
+  },
+  {
+    icon: BookOpen,
+    who: "Educators",
+    title: "Turn lessons into explainers",
+    text: "Structure lessons into episodes, then render a consistent visual sequence from the same brief.",
+  },
+  {
+    icon: Gamepad2,
+    who: "IP and game teams",
+    title: "Keep characters consistent",
+    text: "Use the same story world across trailers, lore drops, teasers, and campaign assets.",
+  },
+];
+
+const STEPS = [
+  { n: "01", title: "Write the brief", text: "Drop in a campaign, lesson, or series idea. The outline expands from one source of truth." },
+  { n: "02", title: "Approve the plan", text: "Review the episode structure before any render runs. Fix the story once, not after the cost." },
+  { n: "03", title: "Generate scenes", text: "Render scenes independently so one failure does not block the whole episode." },
+  { n: "04", title: "Export and reuse", text: "Re-run individual scenes, keep the cast memory, and publish the next episode faster." },
+];
 
 const TEMPLATES = [
-  { icon: "📢", label: "Product Launch Ad",    sub: "15/30/60s video concepts from brief",   tag: "Brand" },
-  { icon: "🎌", label: "Anime Trailer",          sub: "Cinematic series teaser with characters", tag: "Creator" },
-  { icon: "📱", label: "TikTok Serial Episode",  sub: "Vertical short-form serialized story",  tag: "Social" },
-  { icon: "🎓", label: "Course Lesson",          sub: "Animated explainer with narrator char",  tag: "Education" },
-  { icon: "⚔️", label: "Game Lore Short",        sub: "Cinematic world-building & lore reveal", tag: "Web3 / Game" },
-  { icon: "👤", label: "Character Reveal",       sub: "Introduce your mascot or protagonist",   tag: "Creator" },
+  { tag: "Brand", label: "Product launch" },
+  { tag: "Creator", label: "Serialized fiction" },
+  { tag: "Social", label: "Short-form hooks" },
+  { tag: "Education", label: "Lesson explainer" },
+  { tag: "Game", label: "Lore teaser" },
+  { tag: "Studio", label: "Client campaign" },
 ];
 
-// ─── ICP rows ─────────────────────────────────────────────────────────────────
-
-const ICPS = [
+const FEATURES = [
   {
-    icon: <Users className="h-5 w-5" />,
-    who: "Indie Creators",
-    tagline: "Build a serialized world — not a one-off clip",
-    detail: "Define your cast once. Every episode remembers them. Regenerate any scene without rebuilding the whole pipeline.",
-    color: "bg-violet-50 text-violet-600",
+    title: "Memory across episodes",
+    text: "Characters, tone, and brand details persist instead of resetting every run.",
   },
   {
-    icon: <Briefcase className="h-5 w-5" />,
-    who: "Agencies",
-    tagline: "Produce ad campaigns for dozens of clients",
-    detail: "Each client gets their own brand bible. Approve the storyboard before a single frame renders. Ship polished 15/30/60s cuts.",
-    color: "bg-blue-50 text-blue-600",
+    title: "Approval gates",
+    text: "Outline approval happens before render. Scene review happens before export.",
   },
   {
-    icon: <TrendingUp className="h-5 w-5" />,
-    who: "Small Businesses",
-    tagline: "Social video at agency quality, not agency cost",
-    detail: "Start with a template. Drop in your product brief. Get vertical video, captions, and post copy — ready to schedule.",
-    color: "bg-emerald-50 text-emerald-600",
-  },
-  {
-    icon: <BookOpen className="h-5 w-5" />,
-    who: "Educators",
-    tagline: "Animated explainers from your course content",
-    detail: "Paste your lesson notes. Characters and storyboard are auto-generated. Edit individual scenes before final render.",
-    color: "bg-amber-50 text-amber-600",
-  },
-  {
-    icon: <Gamepad2 className="h-5 w-5" />,
-    who: "Web3 & Game Teams",
-    tagline: "IP bible → trailers, lore videos, character teasers",
-    detail: "Cinematic shorts for your universe. Consistent character designs across every piece of content.",
-    color: "bg-rose-50 text-rose-600",
+    title: "Queue-backed generation",
+    text: "Jobs can retry, lease, and report progress without blocking the interface.",
   },
 ];
 
-// ─── How it works ─────────────────────────────────────────────────────────────
+function GalleryCarousel({ items }: { items: GalleryItem[] }) {
+  const railRef = useRef<HTMLDivElement>(null);
 
-const HOW = [
-  { n: "01", title: "Choose a workflow",   desc: "Pick from templates: Brand Campaign, Creator Series, Explainer, Social Short, Game Lore." },
-  { n: "02", title: "Write the brief",     desc: "Paste your prompt or product brief. Qwen generates a full episode plan with characters and scene breakdowns." },
-  { n: "03", title: "Approve the outline", desc: "Review the plan before anything renders. Edit scenes, swap characters, tweak tone. Approve when ready." },
-  { n: "04", title: "Generate & iterate",  desc: "Wan 2.7 renders each scene. Regenerate individual scenes without rerunning the whole pipeline." },
-  { n: "05", title: "Export & publish",    desc: "Download the assembled episode, captions, post copy, and platform-specific cuts." },
-];
+  const scroll = (direction: "left" | "right") => {
+    const rail = railRef.current;
+    if (!rail) return;
+    const amount = Math.min(rail.clientWidth * 0.88, 560);
+    rail.scrollBy({ left: direction === "left" ? -amount : amount, behavior: "smooth" });
+  };
 
-// ─── Component ────────────────────────────────────────────────────────────────
+  return (
+    <section className="mx-auto max-w-[1200px] px-4 py-16 md:px-6">
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <div className="inline-flex items-center gap-2 rounded-[12px] border border-border bg-white px-3 py-1 text-[11px] font-medium uppercase text-muted-foreground">
+            <Sparkles className="h-3.5 w-3.5 text-[color:#ff5a00]" />
+            Latest renders
+          </div>
+          <h2 className="mt-4 text-3xl font-semibold text-foreground">Generated videos from the database</h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+            Recent scene clips and assembled episodes pulled from live production records.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="icon" onClick={() => scroll("left")} aria-label="Scroll videos left">
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <Button variant="outline" size="icon" onClick={() => scroll("right")} aria-label="Scroll videos right">
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+
+      <div
+        ref={railRef}
+        className="mt-8 flex gap-4 overflow-x-auto scroll-smooth pb-2 [scrollbar-width:none] [-ms-overflow-style:none]"
+        style={{ scrollSnapType: "x mandatory" }}
+      >
+        {items.map((item) => (
+          <article
+            key={item.id}
+            className="min-w-[82vw] max-w-[82vw] shrink-0 snap-start md:min-w-[420px] md:max-w-[420px]"
+          >
+            <div className="overflow-hidden rounded-[36px] border border-border bg-white">
+              <div className="border-b border-border bg-muted/40 px-5 py-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-[11px] uppercase text-muted-foreground">{item.story_title}</div>
+                    <h3 className="mt-1 text-lg font-semibold text-foreground">{item.title}</h3>
+                  </div>
+                  <Badge className="border-0 bg-[color:#ff5a00] text-white">
+                    {item.kind}
+                  </Badge>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                  <span className="rounded-[10000px] border border-border bg-white px-2.5 py-1">
+                    Ep {item.episode_number}
+                    {item.scene_number ? ` · Sc ${item.scene_number}` : ""}
+                  </span>
+                  <span className="rounded-[10000px] border border-border bg-white px-2.5 py-1">
+                    {new Date(item.created_at).toLocaleDateString()}
+                  </span>
+                </div>
+              </div>
+
+              <div className="bg-foreground p-3">
+                {item.media_kind === "image" ? (
+                  <img
+                    className="aspect-video w-full rounded-[24px] bg-black object-cover"
+                    src={item.media_url}
+                    alt={item.title}
+                    loading="lazy"
+                  />
+                ) : (
+                  <video
+                    className="aspect-video w-full rounded-[24px] bg-black object-cover"
+                    src={item.media_url}
+                    controls
+                    muted
+                    loop
+                    playsInline
+                    preload="metadata"
+                  />
+                )}
+              </div>
+
+              <div className="space-y-3 p-5">
+                <p className="text-sm leading-6 text-muted-foreground line-clamp-3">
+                  {item.summary || "Generated media from a completed production step."}
+                </p>
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span>{item.media_kind === "image" ? (item.duration ? `${Math.round(item.duration)}s still` : "Image scene") : (item.duration ? `${Math.round(item.duration)}s` : "Video clip")}</span>
+                  <a href={item.media_url} target="_blank" rel="noreferrer" className="font-medium text-foreground hover:underline">
+                    Open source file
+                  </a>
+                </div>
+              </div>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
 
 export default function Home() {
+  const { data: galleryItems = [] } = useQuery({
+    queryKey: ["gallery", "public"],
+    queryFn: api.getPublicGallery,
+    staleTime: 30_000,
+  });
+
+  const visibleGallery = useMemo(() => galleryItems.filter((item) => item.media_url), [galleryItems]);
+
   return (
     <Layout>
-      <div className="flex-1 bg-white">
+      <div className="bg-background">
+        <section className="border-b border-border">
+          <div className="mx-auto grid max-w-[1200px] gap-10 px-4 py-16 md:px-6 lg:grid-cols-[1.1fr_0.9fr] lg:items-center lg:py-20">
+            <div className="space-y-7">
+              <div className="inline-flex items-center gap-2 rounded-[12px] border border-border bg-white px-3 py-1.5 text-[12px] font-medium text-foreground">
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[color:#ff5a00] text-white">
+                  <Sparkles className="h-3 w-3" />
+                </span>
+                Serialized video production
+              </div>
 
-        {/* ── Hero ─────────────────────────────────────────────────────── */}
-        <section className="relative overflow-hidden bg-white pt-20">
-          <div className="absolute inset-0 bg-gradient-to-b from-violet-50/60 via-white to-white pointer-events-none" />
-          <div className="container px-4 md:px-6 relative">
-            <div className="max-w-3xl mx-auto text-center pt-10 pb-16">
-              <motion.div
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.4 }}
-              >
-                <div className="inline-flex items-center gap-2 text-xs font-medium text-violet-700 bg-violet-50 border border-violet-200 rounded-full px-3 py-1 mb-6">
-                  <span className="w-1.5 h-1.5 rounded-full bg-violet-500" />
-                  AI Showrunner for branded video series
-                </div>
-
-                <h1 className="text-5xl md:text-6xl font-bold tracking-tight text-gray-900 mb-4 leading-[1.1]">
-                  Consistent characters.{" "}
-                  <span className="text-transparent bg-clip-text bg-gradient-to-r from-violet-600 to-fuchsia-500">
-                    Repeatable production.
-                  </span>
+              <div className="space-y-4">
+                <h1 className="max-w-3xl text-5xl font-semibold leading-[1.08] tracking-tight text-foreground md:text-6xl">
+                  Not a clip generator.
+                  <span className="block">A series engine for teams that ship weekly.</span>
                 </h1>
-
-                <p className="text-xl text-gray-500 max-w-xl mx-auto mb-8 leading-relaxed">
-                  Create a brief, approve the storyboard, generate each scene — and regenerate any single
-                  scene without rerunning the whole pipeline. Built for creators and teams who ship video weekly.
+                <p className="max-w-2xl text-[15px] leading-7 text-muted-foreground">
+                  StoryForge turns one brief into an approved outline, scene plan, and generated episode.
+                  It is built for recurring production, not one-off demos.
                 </p>
+              </div>
 
-                <div className="flex flex-col sm:flex-row gap-3 justify-center">
-                  <Link href="/dashboard">
-                    <Button size="lg" className="bg-gray-900 hover:bg-gray-700 text-white font-medium px-7 h-11 rounded-xl text-sm">
-                      Start for free <ArrowRight className="ml-2 h-4 w-4" />
-                    </Button>
-                  </Link>
-                  <Link href="/pricing">
-                    <Button size="lg" variant="outline" className="border-gray-200 text-gray-700 hover:bg-gray-50 font-medium px-7 h-11 rounded-xl text-sm">
-                      See pricing
-                    </Button>
-                  </Link>
-                </div>
-              </motion.div>
-            </div>
-          </div>
-
-          {/* Aurora strip */}
-          <div className="w-full overflow-hidden h-40 relative">
-            <div className="absolute inset-0 bg-gradient-to-r from-violet-200/40 via-fuchsia-200/30 to-blue-200/40 blur-2xl scale-110" />
-            {/* Template preview cards floating */}
-            <div className="absolute inset-0 flex items-center justify-center gap-3 px-4 overflow-hidden">
-              {TEMPLATES.map((t, i) => (
-                <motion.div
-                  key={t.label}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.07, duration: 0.4 }}
-                  className="bg-white/90 border border-gray-200 rounded-xl px-3 py-2 shadow-sm shrink-0 hidden sm:flex items-center gap-2"
-                >
-                  <span className="text-lg">{t.icon}</span>
-                  <span className="text-xs font-medium text-gray-700 whitespace-nowrap">{t.label}</span>
-                </motion.div>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* ── Who it's for ─────────────────────────────────────────────── */}
-        <section className="py-20 bg-white">
-          <div className="container px-4 md:px-6">
-            <div className="text-center mb-12">
-              <h2 className="text-3xl font-bold text-gray-900 mb-3">
-                Built for teams that{" "}
-                <span className="text-violet-600">ship video weekly</span>
-              </h2>
-              <p className="text-gray-500 max-w-lg mx-auto">
-                Not a one-click AI toy. A production system for the workflows that actually make money.
-              </p>
-            </div>
-
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
-              {ICPS.map((icp) => (
-                <div
-                  key={icp.who}
-                  className="bg-white border border-gray-200 rounded-2xl p-6 hover:border-violet-300 hover:shadow-sm transition-all group"
-                >
-                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center mb-4 ${icp.color}`}>
-                    {icp.icon}
-                  </div>
-                  <div className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1">{icp.who}</div>
-                  <h3 className="font-semibold text-gray-900 mb-2 leading-snug">{icp.tagline}</h3>
-                  <p className="text-sm text-gray-500 leading-relaxed">{icp.detail}</p>
-                </div>
-              ))}
-
-              {/* CTA card */}
-              <div className="bg-gradient-to-br from-violet-600 to-fuchsia-600 rounded-2xl p-6 flex flex-col justify-between">
-                <div>
-                  <LayoutTemplate className="h-6 w-6 text-white/80 mb-4" />
-                  <h3 className="font-semibold text-white mb-2 leading-snug">Start with a template</h3>
-                  <p className="text-sm text-white/70 leading-relaxed">
-                    10+ pre-built workflows with structure, scene count, pacing, and output format already configured.
-                  </p>
-                </div>
+              <div className="flex flex-col gap-3 sm:flex-row">
                 <Link href="/dashboard">
-                  <button className="mt-6 flex items-center gap-2 text-sm font-medium text-white hover:gap-3 transition-all">
-                    Browse templates <ChevronRight className="h-4 w-4" />
-                  </button>
+                  <Button size="lg" className="w-full sm:w-auto">
+                    Start a production <ArrowRight className="h-4 w-4" />
+                  </Button>
+                </Link>
+                <Link href="/pricing">
+                  <Button size="lg" variant="outline" className="w-full sm:w-auto">
+                    View pricing
+                  </Button>
                 </Link>
               </div>
-            </div>
-          </div>
-        </section>
 
-        {/* ── How it works ─────────────────────────────────────────────── */}
-        <section className="py-20 bg-gray-50 border-y border-gray-100">
-          <div className="container px-4 md:px-6">
-            <div className="text-center mb-12">
-              <h2 className="text-3xl font-bold text-gray-900 mb-3">
-                How StoryForge works
-              </h2>
-              <p className="text-gray-500 max-w-md mx-auto">
-                Controlled autonomy — not a black box. You approve every stage before it costs you a render.
-              </p>
+              <div className="grid gap-3 sm:grid-cols-3">
+                {[
+                  ["Approval before render", "Outline-first workflow"],
+                  ["Scene-level retries", "No full rerun needed"],
+                  ["Persistent cast", "Characters stay consistent"],
+                ].map(([label, sub]) => (
+                  <div key={label} className="rounded-[24px] border border-border bg-white p-4">
+                    <div className="text-sm font-medium text-foreground">{label}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">{sub}</div>
+                  </div>
+                ))}
+              </div>
             </div>
 
-            <div className="max-w-2xl mx-auto space-y-0">
-              {HOW.map((step, i) => (
-                <div key={step.n} className="flex gap-5">
-                  {/* Connector */}
-                  <div className="flex flex-col items-center">
-                    <div className="w-8 h-8 rounded-full bg-violet-600 text-white text-xs font-bold flex items-center justify-center shrink-0">
-                      {i + 1}
+            <Card className="overflow-hidden">
+              <div className="border-b border-border bg-muted/40 p-7">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-[11px] uppercase text-muted-foreground">Current production</div>
+                    <h2 className="mt-2 text-2xl font-semibold text-foreground">Project Atlas</h2>
+                    <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
+                      Product brief is approved. Three scenes are queued. One failure can retry without blocking the episode.
+                    </p>
+                  </div>
+                  <Badge className="bg-[color:#ff5a00] text-white border-0">Outline approved</Badge>
+                </div>
+              </div>
+              <CardContent className="space-y-5 p-7">
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {[
+                    ["Draft", "Brief locked"],
+                    ["Queue", "3 scenes pending"],
+                    ["Export", "Vertical cut"],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-[24px] border border-border bg-background p-4">
+                      <div className="text-[11px] uppercase text-muted-foreground">{label}</div>
+                      <div className="mt-2 text-sm font-medium text-foreground">{value}</div>
                     </div>
-                    {i < HOW.length - 1 && <div className="w-px flex-1 bg-violet-200 my-1" />}
-                  </div>
-                  {/* Content */}
-                  <div className="pb-8">
-                    <div className="text-[10px] font-mono text-gray-400 mb-0.5">{step.n}</div>
-                    <h3 className="font-semibold text-gray-900 mb-1">{step.title}</h3>
-                    <p className="text-sm text-gray-500 leading-relaxed">{step.desc}</p>
-                  </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </div>
-        </section>
 
-        {/* ── Key capabilities ──────────────────────────────────────────── */}
-        <section className="py-20 bg-white">
-          <div className="container px-4 md:px-6">
-            <div className="text-center mb-12">
-              <h2 className="text-3xl font-bold text-gray-900 mb-3">
-                The orchestration layer{" "}
-                <span className="text-violet-600">that sets us apart</span>
-              </h2>
-            </div>
-
-            <div className="grid md:grid-cols-3 gap-6">
-              {[
-                {
-                  icon: <Layers className="h-5 w-5" />,
-                  title: "Character & Brand Memory",
-                  desc: "Define characters once. Their appearance, personality, and voice persist across every episode, every campaign, every scene — stored in CockroachDB.",
-                  items: ["Character bibles", "Brand bibles", "Visual consistency"],
-                },
-                {
-                  icon: <Film className="h-5 w-5" />,
-                  title: "Granular Regeneration",
-                  desc: "Regenerate one scene, one character ref, or one intro — without rerunning the whole pipeline. Every stage is independently addressable.",
-                  items: ["Per-scene regeneration", "Character ref swap", "Aspect ratio variants"],
-                },
-                {
-                  icon: <Cpu className="h-5 w-5" />,
-                  title: "Approval Gates",
-                  desc: "Approve the outline before video renders. Approve character refs before scene generation. No wasted renders on content you wouldn't publish.",
-                  items: ["Outline approval", "Character approval", "Scene-level review"],
-                },
-              ].map(c => (
-                <div key={c.title} className="bg-white border border-gray-200 rounded-2xl p-6 hover:border-violet-300 hover:shadow-sm transition-all">
-                  <div className="w-9 h-9 rounded-xl bg-violet-50 text-violet-600 flex items-center justify-center mb-4">
-                    {c.icon}
+                <div className="rounded-[28px] border border-border bg-white p-5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-[11px] uppercase text-muted-foreground">Workflow</div>
+                      <div className="mt-1 text-lg font-semibold text-foreground">Brief to episode</div>
+                    </div>
+                    <div className="inline-flex items-center gap-1 rounded-[12px] border border-border bg-muted px-3 py-1 text-xs text-foreground">
+                      <Clock className="h-3.5 w-3.5" /> 8 min
+                    </div>
                   </div>
-                  <h3 className="font-semibold text-gray-900 mb-2">{c.title}</h3>
-                  <p className="text-sm text-gray-500 leading-relaxed mb-4">{c.desc}</p>
-                  <ul className="space-y-1.5">
-                    {c.items.map(item => (
-                      <li key={item} className="flex items-center gap-2 text-xs text-gray-600">
-                        <CheckCircle2 className="h-3.5 w-3.5 text-violet-500 shrink-0" />
-                        {item}
-                      </li>
+                  <div className="mt-5 space-y-3">
+                    {[
+                      "Story plan written",
+                      "Characters approved",
+                      "Scene render leased",
+                      "Episode ready to export",
+                    ].map((step, index) => (
+                      <div key={step} className="flex items-center gap-3">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-muted text-xs font-medium text-foreground">
+                          {index + 1}
+                        </div>
+                        <div className="flex-1 rounded-[14px] border border-border bg-background px-4 py-2 text-sm text-foreground">
+                          {step}
+                        </div>
+                      </div>
                     ))}
-                  </ul>
+                  </div>
                 </div>
-              ))}
-            </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-[28px] border border-border bg-background p-5">
+                    <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                      <Play className="h-4 w-4 text-[color:#ff5a00]" />
+                      Preview render
+                    </div>
+                    <div className="mt-4 aspect-[16/10] rounded-[24px] border border-dashed border-border bg-white p-4">
+                      <div className="flex h-full items-center justify-center text-center text-sm text-muted-foreground">
+                        Storyboard, clip, and approval state live here.
+                      </div>
+                    </div>
+                  </div>
+                  <div className="rounded-[28px] border border-border bg-background p-5">
+                    <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                      <BadgeCheck className="h-4 w-4 text-[color:#ff5a00]" />
+                      Release notes
+                    </div>
+                    <div className="mt-4 space-y-3">
+                      {[
+                        "Job leasing prevents duplicate renders.",
+                        "Retries are per-step, not whole-run.",
+                        "Worker heartbeats keep the queue visible.",
+                      ].map((line) => (
+                        <div key={line} className="rounded-[14px] border border-border bg-white px-4 py-3 text-sm text-muted-foreground">
+                          {line}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
           </div>
         </section>
 
-        {/* ── Template gallery ──────────────────────────────────────────── */}
-        <section className="py-20 bg-gray-50 border-t border-gray-100">
-          <div className="container px-4 md:px-6">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-10 gap-4">
-              <div>
-                <h2 className="text-3xl font-bold text-gray-900 mb-2">Production templates</h2>
-                <p className="text-gray-500">Start fast with structure already configured.</p>
+        {visibleGallery.length > 0 && (
+          <GalleryCarousel items={visibleGallery} />
+        )}
+
+        <section className="mx-auto max-w-[1200px] px-4 py-16 md:px-6">
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              <div className="inline-flex items-center gap-2 rounded-[12px] border border-border bg-white px-3 py-1 text-[11px] font-medium uppercase text-muted-foreground">
+                <Briefcase className="h-3.5 w-3.5 text-[color:#ff5a00]" />
+                ICP
               </div>
-              <Link href="/dashboard">
-                <Button variant="outline" size="sm" className="border-gray-200 text-gray-600 rounded-lg text-sm">
-                  Use a template <ArrowRight className="ml-2 h-3.5 w-3.5" />
-                </Button>
-              </Link>
+              <h2 className="mt-4 text-3xl font-semibold text-foreground">Who this is for</h2>
             </div>
+            <Link href="/pricing" className="hidden items-center gap-2 text-sm font-medium text-foreground md:inline-flex">
+              See plans <ChevronRight className="h-4 w-4" />
+            </Link>
+          </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-              {TEMPLATES.map(t => (
-                <Link key={t.label} href="/dashboard">
-                  <div className="bg-white border border-gray-200 hover:border-violet-300 hover:shadow-sm rounded-2xl p-5 cursor-pointer transition-all group">
-                    <span className="text-2xl mb-3 block">{t.icon}</span>
-                    <div className="text-[10px] font-semibold uppercase tracking-widest text-violet-500 mb-1">{t.tag}</div>
-                    <h3 className="font-semibold text-gray-900 text-sm mb-1 group-hover:text-violet-600 transition-colors">{t.label}</h3>
-                    <p className="text-xs text-gray-400 leading-relaxed">{t.sub}</p>
-                  </div>
-                </Link>
-              ))}
-            </div>
+          <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            {ICPs.map((item) => {
+              const Icon = item.icon;
+              return (
+                <Card key={item.who}>
+                  <CardContent className="space-y-4 p-7">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-[14px] border border-border bg-muted text-foreground">
+                      <Icon className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <div className="text-[11px] uppercase text-muted-foreground">{item.who}</div>
+                      <h3 className="mt-2 text-lg font-semibold text-foreground">{item.title}</h3>
+                    </div>
+                    <p className="text-sm leading-6 text-muted-foreground">{item.text}</p>
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
         </section>
 
-        {/* ── Stats ────────────────────────────────────────────────────── */}
-        <section className="py-16 bg-white border-y border-gray-100">
-          <div className="container px-4 md:px-6">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
-              {[
-                { value: "Qwen-Plus",  label: "Story & Script" },
-                { value: "Wan 2.7",    label: "Video Render" },
-                { value: "B2 + CRDB",  label: "Storage & Memory" },
-                { value: "< 10 min",   label: "Per Episode" },
-              ].map(s => (
-                <div key={s.label}>
-                  <div className="flex items-center justify-center gap-2 mb-1">
-                    <span className="w-2 h-2 rounded-full bg-violet-500" />
-                    <span className="text-xl font-bold text-gray-900">{s.value}</span>
-                  </div>
-                  <span className="text-xs text-gray-400 uppercase tracking-wider">{s.label}</span>
+        <section className="bg-foreground text-background">
+          <div className="mx-auto max-w-[1200px] px-4 py-16 md:px-6">
+            <div className="max-w-2xl">
+              <div className="inline-flex items-center gap-2 rounded-[12px] border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-medium uppercase text-background/70">
+                <Layers className="h-3.5 w-3.5 text-[color:#ff5a00]" />
+                Product edge
+              </div>
+              <h2 className="mt-4 text-3xl font-semibold">Built around the workflow, not the output button</h2>
+            </div>
+            <div className="mt-8 grid gap-4 md:grid-cols-3">
+              {FEATURES.map((feature) => (
+                <div key={feature.title} className="rounded-[28px] border border-white/10 bg-white/5 p-6">
+                  <h3 className="text-lg font-semibold">{feature.title}</h3>
+                  <p className="mt-3 text-sm leading-6 text-background/70">{feature.text}</p>
                 </div>
               ))}
             </div>
           </div>
         </section>
 
-        {/* ── CTA ──────────────────────────────────────────────────────── */}
-        <section className="py-24 bg-gray-900">
-          <div className="container px-4 md:px-6 text-center">
-            <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
-              Your characters. Your series. On autopilot.
-            </h2>
-            <p className="text-gray-400 max-w-md mx-auto mb-8">
-              Join creators and agencies using StoryForge to ship branded video series every week.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-3 justify-center">
-              <Link href="/dashboard">
-                <Button size="lg" className="bg-white hover:bg-gray-100 text-gray-900 font-medium px-8 h-12 rounded-xl">
-                  Start free <ArrowRight className="ml-2 h-4 w-4" />
-                </Button>
+        <section className="mx-auto max-w-[1200px] px-4 py-16 md:px-6">
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              <div className="inline-flex items-center gap-2 rounded-[12px] border border-border bg-white px-3 py-1 text-[11px] font-medium uppercase text-muted-foreground">
+                <Film className="h-3.5 w-3.5 text-[color:#ff5a00]" />
+                Templates
+              </div>
+              <h2 className="mt-4 text-3xl font-semibold text-foreground">Production templates</h2>
+            </div>
+            <Link href="/dashboard" className="hidden items-center gap-2 text-sm font-medium text-foreground md:inline-flex">
+              Open dashboard <ChevronRight className="h-4 w-4" />
+            </Link>
+          </div>
+
+          <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {TEMPLATES.map((template) => (
+              <Link key={template.label} href="/dashboard">
+                <Card className="group h-full transition-colors hover:border-foreground">
+                  <CardContent className="space-y-4 p-7">
+                    <div className="inline-flex items-center rounded-[12px] border border-border bg-muted px-3 py-1 text-[11px] font-medium uppercase text-foreground">
+                      {template.tag}
+                    </div>
+                    <h3 className="text-lg font-semibold text-foreground group-hover:underline">{template.label}</h3>
+                    <p className="text-sm leading-6 text-muted-foreground">
+                      Start from a structure that already fits the format.
+                    </p>
+                  </CardContent>
+                </Card>
               </Link>
+            ))}
+          </div>
+        </section>
+
+        <section className="mx-auto max-w-[1200px] px-4 pb-16 md:px-6">
+          <div className="rounded-[36px] border border-border bg-white p-8 md:p-10">
+            <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+              <div className="max-w-2xl">
+                <div className="inline-flex items-center gap-2 rounded-[12px] border border-border bg-muted px-3 py-1 text-[11px] font-medium uppercase text-muted-foreground">
+                  <TrendingUp className="h-3.5 w-3.5 text-[color:#ff5a00]" />
+                  Positioning
+                </div>
+                <h2 className="mt-4 text-3xl font-semibold text-foreground">A series engine is the sharper sell.</h2>
+                <p className="mt-4 text-sm leading-6 text-muted-foreground">
+                  The market is crowded with AI video generators. The wedge here is consistency, approvals, and a repeatable production loop for recurring content.
+                </p>
+              </div>
               <Link href="/pricing">
-                <Button size="lg" variant="outline" className="border-gray-700 text-gray-300 hover:bg-gray-800 font-medium px-8 h-12 rounded-xl">
-                  View pricing
+                <Button variant="outline">
+                  Review plans <ArrowRight className="h-4 w-4" />
                 </Button>
               </Link>
             </div>

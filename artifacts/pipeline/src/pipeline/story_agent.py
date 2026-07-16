@@ -123,7 +123,9 @@ Return ONLY valid JSON with this exact structure:
           "location": "specific location",
           "mood": "emotional tone",
           "action": "key action or event",
-          "visual_prompt": "detailed cinematic video generation prompt, anime style, specific visual details"
+          "visual_prompt": "detailed cinematic generation prompt, anime style, specific visual details",
+          "duration_seconds": 6,
+          "narration": "optional narration or voiceover line for the scene"
         }
       ]
     }
@@ -163,6 +165,15 @@ Given an IP bible or world concept, generate a lore video plan.
 Episodes are cinematic shorts: character origin stories, world reveals, faction trailers, or lore drops.
 Visual prompts must be epic, cinematic, atmospheric — think AAA game trailers. Characters are iconic,
 with detailed designs that will appear consistently across lore content.
+{_SHARED_JSON_SCHEMA}""",
+
+    "narrated_image_story": f"""You are a visual story producer for narrated image sequences.
+Given a story premise, generate a plan where each scene is a still image that advances the story
+while narration carries the timeline forward. Optimize for character consistency, clear visual
+continuity, and cost-efficient production. Each scene should include a strong single-image
+composition, a scene-specific narration line, and a duration_seconds value between 5 and 10.
+The main character and cast should be described consistently so future image generations can reuse
+those references from scene to scene.
 {_SHARED_JSON_SCHEMA}""",
 }
 
@@ -263,11 +274,23 @@ async def build_scene_prompt(
     story_context: dict,
     previous_scene_summary: str = "",
     style: str = "anime",
+    media_kind: str = "video",
 ) -> str:
-    base      = scene.get("visual_prompt", scene.get("description", ""))
-    location  = scene.get("location", "")
-    mood      = scene.get("mood", "")
-    action    = scene.get("action", "")
+    base = scene.get("visual_prompt", scene.get("description", ""))
+    location = scene.get("location", "")
+    mood = scene.get("mood", "")
+    action = scene.get("action", "")
+
+    if media_kind == "image":
+        media_line = (
+            "Single still-image composition, clear subject separation, no motion blur, "
+            "no collage layout, no text overlay, high continuity with the previous scene."
+        )
+    else:
+        media_line = (
+            "Cinematic motion-friendly composition, strong lighting, detailed environment, "
+            "consistent character design."
+        )
 
     parts = [
         base,
@@ -275,6 +298,6 @@ async def build_scene_prompt(
         f"Mood: {mood}." if mood else "",
         f"Action: {action}." if action else "",
         f"Previous context: {previous_scene_summary}." if previous_scene_summary else "",
-        f"Style: {style}, cinematic anime, high quality, detailed backgrounds, consistent character design.",
+        f"Style: {style}, {media_line}",
     ]
     return " ".join(p for p in parts if p)

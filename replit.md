@@ -5,6 +5,8 @@ An agentic AI pipeline that generates consistent multi-episode anime series — 
 ## Run & Operate
 
 - `bash artifacts/pipeline/run.sh` — run the Python FastAPI pipeline (port 5001)
+- `bash artifacts/pipeline/run-worker-story.sh` — run a story worker lane
+- `bash artifacts/pipeline/run-worker-media.sh` — run a media worker lane
 - `pnpm --filter @workspace/api-server run dev` — run the Node.js API server (port 5000, path `/api`)
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
@@ -46,7 +48,17 @@ An agentic AI pipeline that generates consistent multi-episode anime series — 
 - **B2 for all media** — Every generated asset (character ref images, scene clips, exit frames, assembled episodes, manifests) is uploaded to Backblaze B2 immediately after generation, because Qwen video URLs expire after 24h.
 - **Frame bridging** — The last frame of scene N is uploaded to B2 and fed as a reference image into scene N+1, enabling visual continuity across clips.
 - **Background job tracking** — Generation runs as a FastAPI background task; progress is tracked in `generation_jobs` table so clients can poll `GET /pipeline/jobs/{id}`.
+- **Explicit worker lanes** — Story planning runs on the `story` queue family. Character and scene work runs on the `media` queue family. The worker launcher accepts `WORKER_WORKLOAD=story|media|all`, and the ready/delayed Redis keys are partitioned by lane.
 - **Path routing** — Python pipeline owns `/pipeline/*`; Node.js owns `/api/*`. Both run as separate processes through Replit's shared proxy.
+
+## Horizontal Scaling
+
+Run as many independent worker processes as needed per lane.
+
+- Story workers: `bash artifacts/pipeline/run-worker-story.sh`
+- Media workers: `bash artifacts/pipeline/run-worker-media.sh`
+
+Scale out by starting more copies of the same lane. Story workers only consume story-plan jobs. Media workers only consume character-ref and scene-regeneration jobs. The Redis queue keys and job recovery logic are already partitioned by workload, so additional worker replicas do not need code changes.
 
 ## Product
 
@@ -96,7 +108,6 @@ _Populate as you build — explicit user instructions worth remembering across s
 ## Pointers
 
 - See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
-
 
 
 
