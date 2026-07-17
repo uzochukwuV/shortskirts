@@ -4,7 +4,7 @@
   "license": "MIT",
   "scripts": {
     "preinstall": "node scripts/check-pnpm.cjs",
-    "build": "npm --prefix artifacts/app run build && rm -rf dist && mkdir -p dist && cp -R artifacts/app/dist/public/. dist/",
+    "build": "node scripts/build-deploy.cjs",
     "typecheck:libs": "tsc --build",
     "typecheck": "node scripts/run-pnpm.cjs run typecheck:libs && node scripts/run-pnpm.cjs -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
     "dev:frontend": "node scripts/run-pnpm.cjs --filter @workspace/app dev",
