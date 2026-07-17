@@ -40,12 +40,9 @@ function makeServerBundle() {
 import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const publicDir = path.resolve(__dirname, '..', 'public');
+const rootDir = process.cwd();
+const publicDir = path.resolve(rootDir, 'dist', 'public');
 const backendPort = Number(process.env.PIPELINE_PORT || '8000');
 const appPort = Number(process.env.PORT || '3000');
 const backendUrl = new URL(\`http://127.0.0.1:\${backendPort}\`);
@@ -79,7 +76,7 @@ function contentType(filePath) {
 
 function startBackend() {
   if (backendStarted) return;
-  const runScript = path.resolve(__dirname, '..', '..', 'artifacts', 'pipeline', 'run.sh');
+  const runScript = path.resolve(rootDir, 'artifacts', 'pipeline', 'run.sh');
   if (!fs.existsSync(runScript)) {
     console.warn('[deploy] backend run script not found, serving frontend only');
     return;
@@ -87,7 +84,7 @@ function startBackend() {
 
   backendStarted = true;
   const child = spawn('bash', [runScript], {
-    cwd: path.resolve(__dirname, '..', '..'),
+    cwd: rootDir,
     env: { ...process.env, PORT: String(backendPort) },
     stdio: 'inherit',
     detached: false,
