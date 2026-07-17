@@ -50,7 +50,14 @@ async def generate_narrated_scene_image(
     if continuity_bits:
         prompt = f"{prompt} {' '.join(continuity_bits)}"
 
-    image_bytes = await generate_image_bytes(prompt)
+    reference_image_urls = list(character_refs[:8])
+    if previous_scene_image_url:
+        reference_image_urls.append(previous_scene_image_url)
+
+    image_bytes = await generate_image_bytes(
+        prompt,
+        reference_image_urls=reference_image_urls,
+    )
     if not image_bytes:
         raise RuntimeError("Image generation failed")
 

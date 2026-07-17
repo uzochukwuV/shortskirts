@@ -1,5 +1,7 @@
 import os
 import math
+import asyncio
+import time
 import httpx
 from typing import Optional
 
@@ -8,10 +10,12 @@ from pipeline.story_agent import generate_character_image_prompt
 from pipeline.provider_policy import run_provider_step
 
 QWEN_IMAGE_BASE = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+QWEN_IMAGE_STUDIO_BASE = "https://{workspace_id}.cn-beijing.maas.aliyuncs.com/api/v1"
 AIML_BASE_URL = "https://api.aimlapi.com"
 
 # DashScope image models (primary)
 QWEN_IMAGE_MODELS = ["wanx2.1-t2i-turbo", "wanx-v1"]
+QWEN_IMAGE_REF_MODEL = "wan2.7-image-pro"
 # AIML image models (fallback)
 AIML_IMAGE_MODELS = ["alibaba/wan2.7-image", "flux/schnell"]
 
@@ -40,7 +44,17 @@ async def generate_character_references(
     return urls
 
 
-async def generate_image_bytes(prompt: str) -> Optional[bytes]:
+async def generate_image_bytes(
+    prompt: str,
+    reference_image_urls: list[str] | None = None,
+) -> Optional[bytes]:
+    reference_image_urls = [u for u in (reference_image_urls or []) if u][:9]
+
+    if reference_image_urls and os.environ.get("DASHSCOPE_WORKSPACE_ID"):
+        result = await _try_wan_reference_image(prompt, reference_image_urls)
+        if result:
+            return result
+
     # Try DashScope / Qwen Cloud first
     result = await _try_dashscope_image(prompt)
     if result:
@@ -52,6 +66,121 @@ async def generate_image_bytes(prompt: str) -> Optional[bytes]:
 
 async def _generate_image(prompt: str) -> Optional[bytes]:
     return await generate_image_bytes(prompt)
+
+
+def _extract_image_url(data: dict) -> Optional[str]:
+    if not isinstance(data, dict):
+        return None
+    for key in ("image_url", "url", "output_url"):
+        if data.get(key):
+            return data[key]
+    output = data.get("output")
+    if isinstance(output, dict):
+        for key in ("image_url", "url", "output_url"):
+            if output.get(key):
+                return output[key]
+        results = output.get("results")
+        if isinstance(results, list):
+            for item in results:
+                if isinstance(item, dict):
+                    for key in ("url", "image_url", "output_url"):
+                        if item.get(key):
+                            return item[key]
+    return None
+
+
+async def _try_wan_reference_image(prompt: str, reference_image_urls: list[str]) -> Optional[bytes]:
+    dashscope_key = os.environ.get("DASHSCOPE_API_KEY", "")
+    workspace_id = os.environ.get("DASHSCOPE_WORKSPACE_ID", "").strip()
+    if not dashscope_key or not workspace_id:
+        return None
+
+    endpoint = f"{QWEN_IMAGE_STUDIO_BASE.format(workspace_id=workspace_id)}/services/aigc/image-generation/generation"
+    content = [{"image": url} for url in reference_image_urls] + [{"text": prompt}]
+    payload = {
+        "model": QWEN_IMAGE_REF_MODEL,
+        "input": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": content,
+                }
+            ]
+        },
+        "parameters": {"size": "2K"},
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=90) as http:
+            data = await run_provider_step(
+                "dashscope_image",
+                f"image:{QWEN_IMAGE_REF_MODEL}:submit",
+                lambda: _post_json(
+                    http,
+                    endpoint,
+                    headers={
+                        "Authorization": f"Bearer {dashscope_key}",
+                        "Content-Type": "application/json",
+                        "X-DashScope-Async": "enable",
+                    },
+                    payload=payload,
+                ),
+                extra={"model": QWEN_IMAGE_REF_MODEL, "reference_count": len(reference_image_urls)},
+            )
+
+        task_id = data.get("output", {}).get("task_id")
+        if not task_id:
+            raise RuntimeError(f"No task ID from wan2.7-image-pro submit: {data}")
+
+        return await _poll_wan_reference_image(task_id, dashscope_key)
+    except Exception as e:
+        print(f"[character_gen] wan2.7-image-pro reference generation failed: {str(e)[:120]}")
+        return None
+
+
+async def _poll_wan_reference_image(task_id: str, api_key: str, timeout: int = 600) -> Optional[bytes]:
+    workspace_id = os.environ.get("DASHSCOPE_WORKSPACE_ID", "").strip()
+    if not workspace_id:
+        return None
+
+    poll_url = f"{QWEN_IMAGE_STUDIO_BASE.format(workspace_id=workspace_id)}/tasks/{task_id}"
+    stop_at = time.time() + timeout
+
+    while time.time() < stop_at:
+        await asyncio.sleep(8)
+        async with httpx.AsyncClient(timeout=90) as http:
+            data = await run_provider_step(
+                "dashscope_image",
+                f"image:{QWEN_IMAGE_REF_MODEL}:poll",
+                lambda: _get_json(
+                    http,
+                    poll_url,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                ),
+                extra={"task_id": task_id, "model": QWEN_IMAGE_REF_MODEL},
+            )
+
+        status = (
+            data.get("output", {}).get("task_status")
+            or data.get("task_status")
+            or ""
+        ).upper()
+        if status in {"SUCCEEDED", "SUCCESS", "COMPLETED"}:
+            image_url = _extract_image_url(data)
+            if not image_url:
+                raise RuntimeError(f"wan2.7-image-pro task succeeded but no image URL: {data}")
+            async with httpx.AsyncClient(timeout=60) as http:
+                img_r = await run_provider_step(
+                    "dashscope_image",
+                    f"image:{QWEN_IMAGE_REF_MODEL}:download",
+                    lambda: http.get(image_url, follow_redirects=True),
+                    extra={"task_id": task_id, "model": QWEN_IMAGE_REF_MODEL},
+                )
+                return img_r.content
+        if status in {"FAILED", "CANCELLED", "CANCELED"}:
+            raise RuntimeError(f"wan2.7-image-pro task failed: {data}")
+
+    raise TimeoutError(f"wan2.7-image-pro task {task_id} timed out after {timeout}s")
 
 
 async def _try_dashscope_image(prompt: str) -> Optional[bytes]:
