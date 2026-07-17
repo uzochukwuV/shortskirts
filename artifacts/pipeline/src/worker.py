@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import time
 import uuid
@@ -8,6 +9,7 @@ from contextlib import suppress
 from db.connection import close_pool, get_pool, init_db
 from job_queue import (
     WORKLOAD_ALL,
+    WORKLOAD_AUDIO,
     WORKLOAD_MEDIA,
     WORKLOAD_STORY,
     blpop_job,
@@ -22,7 +24,8 @@ from job_queue import (
     touch_lease,
 )
 from pipeline.metrics import record_pipeline_metric
-from pipeline.job_handlers import run_character_ref_job, run_scene_regen_job
+from pipeline.history import record_checkpoint_history, record_scene_history, record_story_history
+from pipeline.job_handlers import run_character_ref_job, run_checkpoint_audio_job, run_scene_regen_job
 from pipeline.runtime_context import job_context
 from pipeline.orchestrator import run_story_generation
 
@@ -49,6 +52,25 @@ async def _run_handler(pool, row: dict, worker_id: str):
     job_type = row.get("job_type")
     if entity_type == "story" and job_type == "full_episode":
         return await run_story_generation(str(row["entity_id"]), str(row["id"]))
+    if entity_type == "story" and job_type == "full_episode_resume":
+        resume_state = row.get("result")
+        if isinstance(resume_state, str):
+            try:
+                resume_state = json.loads(resume_state)
+            except Exception:
+                resume_state = None
+        if not isinstance(resume_state, dict):
+            resume_state = None
+        return await run_story_generation(str(row["entity_id"]), str(row["id"]), resume_state=resume_state)
+    if entity_type == "story" and job_type == "checkpoint_audio":
+        payload = row.get("result")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                payload = None
+        checkpoint_id = payload.get("checkpoint_id") if isinstance(payload, dict) else row["entity_id"]
+        return await run_checkpoint_audio_job(str(checkpoint_id), str(row["id"]), worker_id)
     if entity_type == "character" or job_type == "char_refs":
         return await run_character_ref_job(str(row["entity_id"]), str(row["id"]), worker_id)
     if entity_type == "scene" or job_type == "scene_regen":
@@ -100,10 +122,67 @@ async def process_job(pool, row, worker_id: str):
             return {"retry_scheduled": True, "delay_seconds": delay}
 
         await mark_job_failed(pool, job_id, error[:1000], worker_id)
-        if row["entity_type"] == "story":
+        if row["entity_type"] == "story" and row.get("job_type") == "checkpoint_audio":
+            payload = row.get("result")
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except Exception:
+                    payload = None
+            checkpoint_id = payload.get("checkpoint_id") if isinstance(payload, dict) else None
+            if checkpoint_id:
+                await pool.execute(
+                    "UPDATE story_generation_checkpoints SET audio_status='failed', updated_at=now() WHERE id=$1",
+                    str(checkpoint_id),
+                )
+                failed_checkpoint = await pool.fetchrow("SELECT * FROM story_generation_checkpoints WHERE id=$1", str(checkpoint_id))
+                failed_story = await pool.fetchrow("SELECT * FROM stories WHERE id=$1", str(row["entity_id"]))
+                if failed_checkpoint and failed_story:
+                    await record_story_history(
+                        pool,
+                        story=failed_story,
+                        event_type="job_failed",
+                        source_job_id=job_id,
+                        payload={"status": failed_story["status"], "error": error[:500]},
+                    )
+                    await record_checkpoint_history(
+                        pool,
+                        story=failed_story,
+                        checkpoint=failed_checkpoint,
+                        event_type="audio_failed",
+                        source_job_id=job_id,
+                        payload={"audio_status": failed_checkpoint["audio_status"], "error": error[:500]},
+                    )
+        elif row["entity_type"] == "story":
             await pool.execute("UPDATE stories SET status='failed', updated_at=now() WHERE id=$1", str(row["entity_id"]))
+            failed_story = await pool.fetchrow("SELECT * FROM stories WHERE id=$1", str(row["entity_id"]))
+            if failed_story:
+                await record_story_history(
+                    pool,
+                    story=failed_story,
+                    event_type="job_failed",
+                    source_job_id=job_id,
+                    payload={"status": failed_story["status"], "error": error[:500]},
+                )
         elif row["entity_type"] == "scene":
             await pool.execute("UPDATE scenes SET status='failed', updated_at=now() WHERE id=$1", str(row["entity_id"]))
+            failed_scene = await pool.fetchrow("SELECT * FROM scenes WHERE id=$1", str(row["entity_id"]))
+            failed_story = await pool.fetchrow(
+                """SELECT s.* FROM scenes sc
+                   JOIN episodes e ON e.id = sc.episode_id
+                   JOIN stories s ON s.id = e.story_id
+                   WHERE sc.id=$1""",
+                str(row["entity_id"]),
+            )
+            if failed_scene and failed_story:
+                await record_scene_history(
+                    pool,
+                    story=failed_story,
+                    scene=failed_scene,
+                    event_type="job_failed",
+                    source_job_id=job_id,
+                    payload={"status": failed_scene["status"], "error": error[:500]},
+                )
         elif row["entity_type"] == "character":
             await pool.execute("UPDATE characters SET updated_at=now() WHERE id=$1", str(row["entity_id"]))
         await record_pipeline_metric(
@@ -134,10 +213,10 @@ async def main():
         f"[worker:{WORKER_WORKLOAD}] started worker_id={worker_id} lease={LEASE_SECONDS}s heartbeat={HEARTBEAT_SECONDS}s"
     )
 
-    if WORKER_WORKLOAD not in {WORKLOAD_STORY, WORKLOAD_MEDIA, WORKLOAD_ALL}:
+    if WORKER_WORKLOAD not in {WORKLOAD_STORY, WORKLOAD_MEDIA, WORKLOAD_AUDIO, WORKLOAD_ALL}:
         raise RuntimeError(f"Unsupported WORKER_WORKLOAD={WORKER_WORKLOAD}")
 
-    workloads = [WORKLOAD_STORY, WORKLOAD_MEDIA] if WORKER_WORKLOAD == WORKLOAD_ALL else [WORKER_WORKLOAD]
+    workloads = [WORKLOAD_STORY, WORKLOAD_MEDIA, WORKLOAD_AUDIO] if WORKER_WORKLOAD == WORKLOAD_ALL else [WORKER_WORKLOAD]
 
     for workload in workloads:
         for job_id in await recover_expired_jobs(pool, workload):

@@ -10,15 +10,18 @@ DELAYED_QUEUE_KEY = "storyforge:jobs:delayed"
 
 WORKLOAD_STORY = "story"
 WORKLOAD_MEDIA = "media"
+WORKLOAD_AUDIO = "audio"
 WORKLOAD_ALL = "all"
 
 READY_QUEUE_KEYS = {
     WORKLOAD_STORY: "storyforge:jobs:ready:story",
     WORKLOAD_MEDIA: "storyforge:jobs:ready:media",
+    WORKLOAD_AUDIO: "storyforge:jobs:ready:audio",
 }
 DELAYED_QUEUE_KEYS = {
     WORKLOAD_STORY: "storyforge:jobs:delayed:story",
     WORKLOAD_MEDIA: "storyforge:jobs:delayed:media",
+    WORKLOAD_AUDIO: "storyforge:jobs:delayed:audio",
 }
 
 _redis_client: Optional[redis.Redis] = None
@@ -54,6 +57,8 @@ async def close_redis():
 
 def job_workload(entity_type: str, job_type: str | None = None) -> str:
     if entity_type == "story":
+        if job_type == "checkpoint_audio":
+            return WORKLOAD_AUDIO
         return WORKLOAD_STORY
     if entity_type in {"character", "scene"}:
         return WORKLOAD_MEDIA
@@ -197,8 +202,10 @@ async def mark_job_retrying(
 async def recover_expired_jobs(pool: asyncpg.Pool, workload: str, limit: int = 100) -> list[str]:
     if workload == WORKLOAD_MEDIA:
         workload_clause = "(entity_type IN ('character','scene') OR job_type IN ('char_refs','scene_regen'))"
+    elif workload == WORKLOAD_AUDIO:
+        workload_clause = "(job_type = 'checkpoint_audio')"
     else:
-        workload_clause = "(entity_type = 'story' OR job_type = 'full_episode')"
+        workload_clause = "(entity_type = 'story' OR job_type IN ('full_episode','full_episode_resume'))"
     rows = await pool.fetch(
         """SELECT id
            FROM generation_jobs

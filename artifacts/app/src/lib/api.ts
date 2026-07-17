@@ -16,9 +16,12 @@ export type Story = {
   style: string;
   num_episodes?: number;
   num_scenes?: number;
-  status: "draft" | "approved" | "generating" | "completed" | "ready" | "failed";
+  status: "draft" | "approved" | "generating" | "checkpoint_review" | "completed" | "ready" | "failed";
   approval_status: "pending_approval" | "approved";
   workflow_type: WorkflowType;
+  workflow_version?: string;
+  generation_version?: string;
+  workflow_state?: Record<string, any> | null;
   episode_plan?: {
     synopsis: string;
     setting: string;
@@ -79,6 +82,13 @@ export type Scene = {
   approval_status: "pending" | "approved" | "rejected" | "locked";
   locked: boolean;
   regeneration_count: number;
+  generation_version?: string;
+  image_model?: string | null;
+  image_model_version?: string | null;
+  edit_model?: string | null;
+  edit_model_version?: string | null;
+  source_scene_id?: string | null;
+  state_snapshot?: Record<string, any> | null;
   title?: string;
   description?: string;
   visual_prompt?: string;
@@ -115,6 +125,49 @@ export type GenerationJob = {
   created_at: string;
 };
 
+export type GenerationCheckpoint = {
+  id: string;
+  story_id: string;
+  job_id?: string | null;
+  resume_job_id?: string | null;
+  batch_number: number;
+  batch_size: number;
+  start_episode_number: number;
+  start_scene_number: number;
+  end_episode_number: number;
+  end_scene_number: number;
+  status: string;
+  generation_version?: string | null;
+  narration_model?: string | null;
+  narration_voice?: string | null;
+  narration_text?: string | null;
+  audio_job_id?: string | null;
+  audio_status?: string | null;
+  narration_audio_url?: string | null;
+  narration_audio_manifest_url?: string | null;
+  state_snapshot?: Record<string, any> | null;
+  resume_state?: Record<string, any> | null;
+  reviewer_notes?: string | null;
+  approved_at?: string | null;
+  reviewed_at?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type HistoryEntry = {
+  id: string;
+  entity_type: "story" | "scene" | "checkpoint";
+  entity_id: string;
+  revision: number;
+  event_type: string;
+  workflow_version?: string | null;
+  generation_version: string;
+  source_job_id?: string | null;
+  state_snapshot?: Record<string, any> | null;
+  payload?: Record<string, any> | null;
+  created_at: string;
+};
+
 export type GalleryItem = {
   id: string;
   kind: "scene" | "episode";
@@ -132,7 +185,31 @@ export type GalleryItem = {
   created_at: string;
 };
 
-const BASE = import.meta.env.VITE_PIPELINE_API_BASE?.trim()?.replace(/\/+$/, "") || "/pipeline";
+function resolvePipelineBase() {
+  const explicit = import.meta.env.VITE_PIPELINE_API_BASE?.trim()?.replace(/\/+$/, "");
+  if (explicit) return explicit;
+
+  if (typeof window !== "undefined") {
+    const { origin, hostname, port } = window.location;
+
+    if (hostname.includes("localhost") || hostname === "127.0.0.1") {
+      return `${origin.replace(/:5000$/, ":8000").replace(/:5173$/, ":8000")}/pipeline`;
+    }
+
+    const remapped = origin.replace("://5000-", "://8000-");
+    if (remapped !== origin) {
+      return `${remapped}/pipeline`;
+    }
+
+    if (port === "5000" || port === "5173") {
+      return `${origin.replace(/:(5000|5173)$/, ":8000")}/pipeline`;
+    }
+  }
+
+  return "/pipeline";
+}
+
+const BASE = resolvePipelineBase();
 const AUTH_TOKEN_KEY = "storyforge_auth_token";
 
 export function getAuthToken() {
@@ -213,6 +290,12 @@ export const api = {
   regenerateScene: (id: string) => req<GenerationJob>(`${BASE}/scenes/${id}/regenerate`, json({})),
 
   getEpisodes: (storyId: string) => req<Episode[]>(`${BASE}/episodes/story/${storyId}`),
+  getStoryCheckpoints: (storyId: string) => req<GenerationCheckpoint[]>(`${BASE}/stories/${storyId}/checkpoints`),
+  approveCheckpoint: (storyId: string, checkpointId: string) => req<GenerationCheckpoint>(`${BASE}/stories/${storyId}/checkpoints/${checkpointId}/approve`, put()),
+  getStoryHistory: (storyId: string) => req<HistoryEntry[]>(`${BASE}/stories/${storyId}/history`),
+  getCheckpointHistory: (storyId: string, checkpointId: string) =>
+    req<HistoryEntry[]>(`${BASE}/stories/${storyId}/checkpoints/${checkpointId}/history`),
+  getSceneHistory: (sceneId: string) => req<HistoryEntry[]>(`${BASE}/scenes/${sceneId}/history`),
   getGallery: () => req<GalleryItem[]>(`${BASE}/gallery`),
   getPublicGallery: () => req<GalleryItem[]>(`${BASE}/gallery/public`),
   getJob: (jobId: string) => req<GenerationJob>(`${BASE}/jobs/${jobId}`),

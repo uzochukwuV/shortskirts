@@ -2,10 +2,19 @@ import json
 from datetime import datetime
 
 from db.connection import get_pool
+from pipeline.history import record_checkpoint_history, record_scene_history
 from pipeline.character_gen import generate_character_references, get_character_embedding
+from pipeline.audio_gen import synthesize_narration_audio
 from pipeline.job_runtime import update_job
 from pipeline.scene_gen import generate_scene_clip
 from pipeline.narrated_image_story import generate_narrated_scene_image
+from pipeline.versioning import (
+    GENERATION_VERSION,
+    IMAGE_EDIT_MODEL_NAME,
+    IMAGE_EDIT_MODEL_VERSION,
+    IMAGE_MODEL_NAME,
+    IMAGE_MODEL_VERSION,
+)
 
 
 async def run_character_ref_job(character_id: str, job_id: str, worker_id: str):
@@ -65,6 +74,7 @@ async def run_character_ref_job(character_id: str, job_id: str, worker_id: str):
 async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
     pool = await get_pool()
     await update_job(pool, job_id, status="running", started_at=datetime.utcnow(), current_step="Loading context")
+    story = None
 
     try:
         scene = await pool.fetchrow("SELECT * FROM scenes WHERE id=$1", scene_id)
@@ -161,33 +171,77 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
             "refs_used": result.get("refs_used", 0),
             "media_kind": result.get("media_kind", "image" if is_narrated_image_story else "video"),
             "narration": result.get("narration", ""),
+            "generation_version": story.get("generation_version", GENERATION_VERSION),
+            "image_model": IMAGE_MODEL_NAME if is_narrated_image_story else None,
+            "image_model_version": IMAGE_MODEL_VERSION if is_narrated_image_story else None,
+            "edit_model": IMAGE_EDIT_MODEL_NAME if is_narrated_image_story else None,
+            "edit_model_version": IMAGE_EDIT_MODEL_VERSION if is_narrated_image_story else None,
         }
         regen_count = (scene.get("regeneration_count") or 0) + 1
         if is_narrated_image_story:
             await pool.execute(
                 """UPDATE scenes SET image_url=$1, clip_url=NULL, exit_frame_url=$2, duration=$3,
                    status='completed', approval_status='pending',
-                   generation_metadata=$4::jsonb, regeneration_count=$5, updated_at=now()
-                   WHERE id=$6""",
+                   generation_metadata=$4::jsonb, regeneration_count=$5, generation_version=$6,
+                   image_model=$7, image_model_version=$8, edit_model=$9, edit_model_version=$10,
+                   state_snapshot=$11::jsonb, updated_at=now()
+                   WHERE id=$12""",
                 result["image_url"],
                 result.get("exit_frame_url"),
                 result.get("duration", 6.0),
                 json.dumps(merged),
                 regen_count,
+                story.get("generation_version", GENERATION_VERSION),
+                IMAGE_MODEL_NAME,
+                IMAGE_MODEL_VERSION,
+                IMAGE_EDIT_MODEL_NAME,
+                IMAGE_EDIT_MODEL_VERSION,
+                json.dumps({
+                    "story_id": str(story["id"]),
+                    "episode_id": str(episode["id"]),
+                    "scene_id": scene_id,
+                    "generation_version": story.get("generation_version", GENERATION_VERSION),
+                    "image_model": IMAGE_MODEL_NAME,
+                    "image_model_version": IMAGE_MODEL_VERSION,
+                    "edit_model": IMAGE_EDIT_MODEL_NAME,
+                    "edit_model_version": IMAGE_EDIT_MODEL_VERSION,
+                }),
                 scene_id,
             )
         else:
             await pool.execute(
                 """UPDATE scenes SET clip_url=$1, exit_frame_url=$2, duration=$3,
                    status='completed', approval_status='pending',
-                   generation_metadata=$4::jsonb, regeneration_count=$5, updated_at=now()
-                   WHERE id=$6""",
+                   generation_metadata=$4::jsonb, regeneration_count=$5, generation_version=$6,
+                   state_snapshot=$7::jsonb, updated_at=now()
+                   WHERE id=$8""",
                 result["clip_url"],
                 result.get("exit_frame_url"),
                 result.get("duration", 5.0),
                 json.dumps(merged),
                 regen_count,
+                story.get("generation_version", GENERATION_VERSION),
+                json.dumps({
+                    "story_id": str(story["id"]),
+                    "episode_id": str(episode["id"]),
+                    "scene_id": scene_id,
+                    "generation_version": story.get("generation_version", GENERATION_VERSION),
+                }),
                 scene_id,
+            )
+        completed_scene = await pool.fetchrow("SELECT * FROM scenes WHERE id=$1", scene_id)
+        if completed_scene:
+            await record_scene_history(
+                pool,
+                story=story,
+                scene=completed_scene,
+                event_type="scene_regenerated",
+                source_job_id=job_id,
+                payload={
+                    "status": completed_scene["status"],
+                    "approval_status": completed_scene.get("approval_status"),
+                    "regen_count": regen_count,
+                },
             )
         await update_job(
             pool,
@@ -205,6 +259,157 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
     except Exception as e:
         print(f"[scenes] Regen failed for {scene_id}: {e}")
         await pool.execute("UPDATE scenes SET status='failed', updated_at=now() WHERE id=$1", scene_id)
+        failed_scene = await pool.fetchrow("SELECT * FROM scenes WHERE id=$1", scene_id)
+        if failed_scene:
+            await record_scene_history(
+                pool,
+                story=story,
+                scene=failed_scene,
+                event_type="scene_regen_failed",
+                source_job_id=job_id,
+                payload={
+                    "status": failed_scene["status"],
+                    "error": str(e)[:500],
+                },
+            )
+        await update_job(
+            pool,
+            job_id,
+            status="failed",
+            current_step=f"Failed: {str(e)[:200]}",
+            error=str(e)[:1000],
+            completed_at=datetime.utcnow(),
+        )
+        raise
+
+
+async def run_checkpoint_audio_job(checkpoint_id: str, job_id: str, worker_id: str):
+    pool = await get_pool()
+    await update_job(pool, job_id, status="running", started_at=datetime.utcnow(), current_step="Loading checkpoint")
+    story = None
+
+    try:
+        checkpoint = await pool.fetchrow("SELECT * FROM story_generation_checkpoints WHERE id=$1", checkpoint_id)
+        if not checkpoint:
+            raise ValueError(f"Checkpoint {checkpoint_id} not found")
+
+        story = await pool.fetchrow("SELECT * FROM stories WHERE id=$1", str(checkpoint["story_id"]))
+        if not story:
+            raise ValueError(f"Story {checkpoint['story_id']} not found")
+
+        rows = await pool.fetch(
+            """SELECT sc.*, e.episode_number
+               FROM scenes sc
+               JOIN episodes e ON e.id = sc.episode_id
+               WHERE e.story_id=$1
+                 AND (e.episode_number > $2 OR (e.episode_number = $2 AND sc.scene_number >= $3))
+                 AND (e.episode_number < $4 OR (e.episode_number = $4 AND sc.scene_number <= $5))
+               ORDER BY e.episode_number ASC, sc.scene_number ASC""",
+            str(checkpoint["story_id"]),
+            checkpoint["start_episode_number"],
+            checkpoint["start_scene_number"],
+            checkpoint["end_episode_number"],
+            checkpoint["end_scene_number"],
+        )
+
+        scenes = []
+        for row in rows:
+            meta = row["generation_metadata"]
+            if isinstance(meta, str):
+                meta = json.loads(meta) if meta else {}
+            meta = meta or {}
+            scenes.append({
+                "scene_number": row["scene_number"],
+                "title": meta.get("title") or f"Scene {row['scene_number']}",
+                "description": meta.get("description", row.get("prompt", "")),
+                "narration": meta.get("narration") or meta.get("description") or row.get("prompt", ""),
+            })
+
+        if not scenes:
+            raise ValueError(f"No scenes found for checkpoint {checkpoint_id}")
+
+        await pool.execute(
+            "UPDATE story_generation_checkpoints SET audio_status='running', updated_at=now() WHERE id=$1",
+            checkpoint_id,
+        )
+        running_checkpoint = await pool.fetchrow("SELECT * FROM story_generation_checkpoints WHERE id=$1", checkpoint_id)
+        if running_checkpoint:
+            await record_checkpoint_history(
+                pool,
+                story=story,
+                checkpoint=running_checkpoint,
+                event_type="checkpoint_audio_running",
+                source_job_id=job_id,
+                payload={"audio_status": "running"},
+            )
+        await update_job(pool, job_id, current_step="Synthesizing narration audio")
+        result = await synthesize_narration_audio(
+            story_id=str(story["id"]),
+            checkpoint_id=checkpoint_id,
+            scenes=scenes,
+            narration_model=checkpoint.get("narration_model"),
+            narration_voice=checkpoint.get("narration_voice"),
+        )
+
+        await pool.execute(
+            """UPDATE story_generation_checkpoints
+               SET audio_status='completed', narration_audio_url=$2, narration_audio_manifest_url=$3,
+                   narration_text=$4, narration_model=$5, narration_voice=$6, updated_at=now()
+               WHERE id=$1""",
+            checkpoint_id,
+            result["narration_audio_url"],
+            result["narration_audio_manifest_url"],
+            result["narration_text"],
+            result["narration_model"],
+            result["narration_voice"],
+        )
+        completed_checkpoint = await pool.fetchrow("SELECT * FROM story_generation_checkpoints WHERE id=$1", checkpoint_id)
+        if completed_checkpoint:
+            await record_checkpoint_history(
+                pool,
+                story=story,
+                checkpoint=completed_checkpoint,
+                event_type="checkpoint_audio_completed",
+                source_job_id=job_id,
+                payload={
+                    "audio_status": completed_checkpoint["audio_status"],
+                    "narration_audio_url": completed_checkpoint.get("narration_audio_url"),
+                    "narration_audio_manifest_url": completed_checkpoint.get("narration_audio_manifest_url"),
+                },
+            )
+
+        await update_job(
+            pool,
+            job_id,
+            status="completed",
+            progress=1,
+            current_step="Done",
+            completed_at=datetime.utcnow(),
+            result={
+                "checkpoint_id": checkpoint_id,
+                "narration_audio_url": result["narration_audio_url"],
+                "narration_audio_manifest_url": result["narration_audio_manifest_url"],
+            },
+        )
+    except Exception as e:
+        print(f"[audio] Narration generation failed for checkpoint {checkpoint_id}: {e}")
+        await pool.execute(
+            "UPDATE story_generation_checkpoints SET audio_status='failed', updated_at=now() WHERE id=$1",
+            checkpoint_id,
+        )
+        failed_checkpoint = await pool.fetchrow("SELECT * FROM story_generation_checkpoints WHERE id=$1", checkpoint_id)
+        if failed_checkpoint:
+            await record_checkpoint_history(
+                pool,
+                story=story,
+                checkpoint=failed_checkpoint,
+                event_type="checkpoint_audio_failed",
+                source_job_id=job_id,
+                payload={
+                    "audio_status": failed_checkpoint["audio_status"],
+                    "error": str(e)[:500],
+                },
+            )
         await update_job(
             pool,
             job_id,

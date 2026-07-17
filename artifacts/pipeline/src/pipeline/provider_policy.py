@@ -81,6 +81,16 @@ STEP_POLICIES = {
         max_delay_seconds=_env_float("AIML_IMAGE_BACKOFF_MAX", 60.0),
         estimated_cost_usd=_env_float("AIML_IMAGE_COST", 0.04),
     ),
+    "dashscope_audio": StepPolicy(
+        name="dashscope_audio",
+        provider="dashscope",
+        rate_limit=int(os.getenv("DASHSCOPE_AUDIO_RATE_LIMIT", "6")),
+        rate_window_seconds=int(os.getenv("DASHSCOPE_AUDIO_RATE_WINDOW", "60")),
+        max_attempts=int(os.getenv("DASHSCOPE_AUDIO_MAX_ATTEMPTS", "4")),
+        base_delay_seconds=_env_float("DASHSCOPE_AUDIO_BACKOFF_BASE", 5.0),
+        max_delay_seconds=_env_float("DASHSCOPE_AUDIO_BACKOFF_MAX", 60.0),
+        estimated_cost_usd=_env_float("DASHSCOPE_AUDIO_COST", 0.02),
+    ),
     "dashscope_video_submit": StepPolicy(
         name="dashscope_video_submit",
         provider="dashscope",

@@ -11,8 +11,9 @@ Key endpoints:
 import json
 from fastapi import APIRouter, HTTPException, Depends
 from db.connection import get_pool
-from models.story import SceneResponse, GenerationJobResponse
+from models.story import SceneResponse, GenerationJobResponse, HistoryEntryResponse
 from job_queue import enqueue_job, WORKLOAD_MEDIA
+from pipeline.history import record_scene_history
 from auth import get_current_user, user_id
 
 router = APIRouter(prefix="/pipeline/scenes", tags=["scenes"])
@@ -51,6 +52,13 @@ def _row_to_scene(r, metadata: dict | None = None) -> SceneResponse:
         approval_status=r.get("approval_status", "pending"),
         locked=r.get("locked", False),
         regeneration_count=r.get("regeneration_count", 0),
+        generation_version=r.get("generation_version", "v1"),
+        image_model=r.get("image_model"),
+        image_model_version=r.get("image_model_version"),
+        edit_model=r.get("edit_model"),
+        edit_model_version=r.get("edit_model_version"),
+        source_scene_id=str(r["source_scene_id"]) if r.get("source_scene_id") else None,
+        state_snapshot=r.get("state_snapshot"),
         created_at=r["created_at"],
         title=metadata.get("title") or f"Scene {r['scene_number']}",
         description=metadata.get("description", ""),
@@ -59,6 +67,33 @@ def _row_to_scene(r, metadata: dict | None = None) -> SceneResponse:
         location=metadata.get("location", ""),
         narration=metadata.get("narration", ""),
         media_kind=metadata.get("media_kind") or ("image" if r.get("image_url") else "video"),
+    )
+
+
+def _history_row_to_response(row) -> HistoryEntryResponse:
+    state_snapshot = row.get("state_snapshot")
+    payload = row.get("payload")
+    if isinstance(state_snapshot, str):
+        try:
+            state_snapshot = json.loads(state_snapshot)
+        except Exception:
+            state_snapshot = None
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            payload = None
+    return HistoryEntryResponse(
+        id=str(row["id"]),
+        entity_type="scene",
+        entity_id=str(row["scene_id"]),
+        revision=row["revision"],
+        event_type=row["event_type"],
+        generation_version=row.get("generation_version", "v1"),
+        source_job_id=str(row["source_job_id"]) if row.get("source_job_id") else None,
+        state_snapshot=state_snapshot,
+        payload=payload,
+        created_at=row["created_at"],
     )
 
 
@@ -90,6 +125,22 @@ async def approve_scene(scene_id: str, user=Depends(get_current_user)):
     )
     if not row:
         raise HTTPException(status_code=404, detail="Scene not found")
+    await record_scene_history(
+        pool,
+        story=await pool.fetchrow(
+            """SELECT s.* FROM scenes sc
+               JOIN episodes e ON e.id = sc.episode_id
+               JOIN stories s ON s.id = e.story_id
+               WHERE sc.id=$1""",
+            scene_id,
+        ),
+        scene=row,
+        event_type="scene_approved",
+        payload={
+            "status": row["status"],
+            "approval_status": row.get("approval_status"),
+        },
+    )
     return _row_to_scene(row)
 
 
@@ -108,6 +159,22 @@ async def reject_scene(scene_id: str, user=Depends(get_current_user)):
     )
     if not row:
         raise HTTPException(status_code=404, detail="Scene not found")
+    await record_scene_history(
+        pool,
+        story=await pool.fetchrow(
+            """SELECT s.* FROM scenes sc
+               JOIN episodes e ON e.id = sc.episode_id
+               JOIN stories s ON s.id = e.story_id
+               WHERE sc.id=$1""",
+            scene_id,
+        ),
+        scene=row,
+        event_type="scene_rejected",
+        payload={
+            "status": row["status"],
+            "approval_status": row.get("approval_status"),
+        },
+    )
     return _row_to_scene(row)
 
 
@@ -124,6 +191,19 @@ async def lock_scene(scene_id: str, user=Depends(get_current_user)):
     )
     if not row:
         raise HTTPException(status_code=404, detail="Scene not found")
+    await record_scene_history(
+        pool,
+        story=await pool.fetchrow(
+            """SELECT s.* FROM scenes sc
+               JOIN episodes e ON e.id = sc.episode_id
+               JOIN stories s ON s.id = e.story_id
+               WHERE sc.id=$1""",
+            scene_id,
+        ),
+        scene=row,
+        event_type="scene_locked",
+        payload={"locked": True},
+    )
     return _row_to_scene(row)
 
 
@@ -159,6 +239,23 @@ async def regenerate_scene(scene_id: str, user=Depends(get_current_user)):
         "UPDATE scenes SET status='running', approval_status='pending', updated_at=now() WHERE id=$1",
         scene_id,
     )
+    updated = await pool.fetchrow("SELECT * FROM scenes WHERE id=$1", scene_id)
+    story = await pool.fetchrow(
+        """SELECT s.* FROM scenes sc
+           JOIN episodes e ON e.id = sc.episode_id
+           JOIN stories s ON s.id = e.story_id
+           WHERE sc.id=$1""",
+        scene_id,
+    )
+    if story and updated:
+        await record_scene_history(
+            pool,
+            story=story,
+            scene=updated,
+            event_type="scene_regen_queued",
+            source_job_id=job_id,
+            payload={"status": updated["status"], "approval_status": updated.get("approval_status")},
+        )
     await enqueue_job(job_id, workload=WORKLOAD_MEDIA)
 
     return GenerationJobResponse(
@@ -172,3 +269,17 @@ async def regenerate_scene(scene_id: str, user=Depends(get_current_user)):
         job_type="scene_regen",
         created_at=job_row["created_at"],
     )
+
+
+@router.get("/{scene_id}/history", response_model=list[HistoryEntryResponse])
+async def get_scene_history(scene_id: str, user=Depends(get_current_user)):
+    pool = await get_pool()
+    if not await _scene_belongs_to_owner(pool, scene_id, user_id(user)):
+        raise HTTPException(status_code=404, detail="Scene not found")
+    rows = await pool.fetch(
+        """SELECT * FROM scene_history
+           WHERE scene_id=$1
+           ORDER BY revision ASC, created_at ASC""",
+        scene_id,
+    )
+    return [_history_row_to_response(row) for row in rows]

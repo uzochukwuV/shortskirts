@@ -42,8 +42,30 @@ CREATE TABLE IF NOT EXISTS stories (
 -- New columns on stories (safe to re-run)
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS owner_id UUID REFERENCES users(id) ON DELETE CASCADE;
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS workflow_type TEXT NOT NULL DEFAULT 'creator_series';
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS workflow_version TEXT NOT NULL DEFAULT 'v1';
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS generation_version TEXT NOT NULL DEFAULT 'v1';
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS workflow_state JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS approval_status TEXT NOT NULL DEFAULT 'pending_approval';
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
+
+-- ── Story history ───────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS story_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    story_id UUID NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+    revision INT NOT NULL,
+    event_type TEXT NOT NULL,
+    workflow_version TEXT NOT NULL DEFAULT 'v1',
+    generation_version TEXT NOT NULL DEFAULT 'v1',
+    source_job_id UUID REFERENCES generation_jobs(id) ON DELETE SET NULL,
+    state_snapshot JSONB NOT NULL DEFAULT '{}',
+    payload JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(story_id, revision)
+);
+
+CREATE INDEX IF NOT EXISTS idx_story_history_story_id ON story_history(story_id);
+CREATE INDEX IF NOT EXISTS idx_story_history_created_at ON story_history(created_at);
 
 -- ── Bibles ────────────────────────────────────────────────────────────────────
 -- Persistent memory: brand bibles, character bibles, world bibles, campaign bibles
@@ -127,8 +149,103 @@ ALTER TABLE scenes ADD COLUMN IF NOT EXISTS approval_status TEXT NOT NULL DEFAUL
 ALTER TABLE scenes ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
 ALTER TABLE scenes ADD COLUMN IF NOT EXISTS locked BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE scenes ADD COLUMN IF NOT EXISTS regeneration_count INT NOT NULL DEFAULT 0;
+ALTER TABLE scenes ADD COLUMN IF NOT EXISTS generation_version TEXT NOT NULL DEFAULT 'v1';
+ALTER TABLE scenes ADD COLUMN IF NOT EXISTS image_model TEXT;
+ALTER TABLE scenes ADD COLUMN IF NOT EXISTS image_model_version TEXT;
+ALTER TABLE scenes ADD COLUMN IF NOT EXISTS edit_model TEXT;
+ALTER TABLE scenes ADD COLUMN IF NOT EXISTS edit_model_version TEXT;
+ALTER TABLE scenes ADD COLUMN IF NOT EXISTS source_scene_id UUID REFERENCES scenes(id) ON DELETE SET NULL;
+ALTER TABLE scenes ADD COLUMN IF NOT EXISTS state_snapshot JSONB NOT NULL DEFAULT '{}';
+
+-- ── Scene history ───────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS scene_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    scene_id UUID NOT NULL REFERENCES scenes(id) ON DELETE CASCADE,
+    story_id UUID NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+    episode_id UUID NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    revision INT NOT NULL,
+    event_type TEXT NOT NULL,
+    generation_version TEXT NOT NULL DEFAULT 'v1',
+    image_model TEXT,
+    image_model_version TEXT,
+    edit_model TEXT,
+    edit_model_version TEXT,
+    source_job_id UUID REFERENCES generation_jobs(id) ON DELETE SET NULL,
+    state_snapshot JSONB NOT NULL DEFAULT '{}',
+    payload JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(scene_id, revision)
+);
+
+CREATE INDEX IF NOT EXISTS idx_scene_history_scene_id ON scene_history(scene_id);
+CREATE INDEX IF NOT EXISTS idx_scene_history_story_id ON scene_history(story_id);
+CREATE INDEX IF NOT EXISTS idx_scene_history_created_at ON scene_history(created_at);
 
 CREATE INDEX IF NOT EXISTS idx_scenes_episode_id ON scenes(episode_id);
+
+-- ── Story checkpoints ───────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS story_generation_checkpoints (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    story_id UUID NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+    job_id UUID REFERENCES generation_jobs(id) ON DELETE SET NULL,
+    resume_job_id UUID REFERENCES generation_jobs(id) ON DELETE SET NULL,
+    batch_number INT NOT NULL DEFAULT 1,
+    batch_size INT NOT NULL DEFAULT 3,
+    start_episode_number INT NOT NULL DEFAULT 1,
+    start_scene_number INT NOT NULL DEFAULT 1,
+    end_episode_number INT NOT NULL DEFAULT 1,
+    end_scene_number INT NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'pending_review',
+    generation_version TEXT NOT NULL DEFAULT 'v1',
+    narration_model TEXT,
+    narration_voice TEXT,
+    narration_text TEXT,
+    audio_job_id UUID REFERENCES generation_jobs(id) ON DELETE SET NULL,
+    audio_status TEXT NOT NULL DEFAULT 'pending',
+    narration_audio_url TEXT,
+    narration_audio_manifest_url TEXT,
+    state_snapshot JSONB NOT NULL DEFAULT '{}',
+    resume_state JSONB,
+    reviewer_notes TEXT,
+    approved_at TIMESTAMPTZ,
+    reviewed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE story_generation_checkpoints ADD COLUMN IF NOT EXISTS generation_version TEXT NOT NULL DEFAULT 'v1';
+ALTER TABLE story_generation_checkpoints ADD COLUMN IF NOT EXISTS state_snapshot JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE story_generation_checkpoints ADD COLUMN IF NOT EXISTS narration_voice TEXT;
+ALTER TABLE story_generation_checkpoints ADD COLUMN IF NOT EXISTS narration_text TEXT;
+ALTER TABLE story_generation_checkpoints ADD COLUMN IF NOT EXISTS narration_audio_url TEXT;
+ALTER TABLE story_generation_checkpoints ADD COLUMN IF NOT EXISTS narration_audio_manifest_url TEXT;
+ALTER TABLE story_generation_checkpoints ADD COLUMN IF NOT EXISTS audio_job_id UUID REFERENCES generation_jobs(id) ON DELETE SET NULL;
+ALTER TABLE story_generation_checkpoints ADD COLUMN IF NOT EXISTS audio_status TEXT NOT NULL DEFAULT 'pending';
+
+-- ── Checkpoint history ──────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS checkpoint_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    checkpoint_id UUID NOT NULL REFERENCES story_generation_checkpoints(id) ON DELETE CASCADE,
+    story_id UUID NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+    revision INT NOT NULL,
+    event_type TEXT NOT NULL,
+    generation_version TEXT NOT NULL DEFAULT 'v1',
+    source_job_id UUID REFERENCES generation_jobs(id) ON DELETE SET NULL,
+    state_snapshot JSONB NOT NULL DEFAULT '{}',
+    payload JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(checkpoint_id, revision)
+);
+
+CREATE INDEX IF NOT EXISTS idx_checkpoint_history_checkpoint_id ON checkpoint_history(checkpoint_id);
+CREATE INDEX IF NOT EXISTS idx_checkpoint_history_story_id ON checkpoint_history(story_id);
+CREATE INDEX IF NOT EXISTS idx_checkpoint_history_created_at ON checkpoint_history(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_story_checkpoints_story_id ON story_generation_checkpoints(story_id);
+CREATE INDEX IF NOT EXISTS idx_story_checkpoints_status ON story_generation_checkpoints(status);
 
 -- ── Scene-character join ──────────────────────────────────────────────────────
 

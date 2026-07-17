@@ -36,6 +36,10 @@ args = "StoryForge Worker Story"
 task = "workflow.run"
 args = "StoryForge Worker Media"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "StoryForge Worker Audio"
+
 [[workflows.workflow]]
 name = "StoryForge Pipeline"
 author = "agent"
@@ -93,6 +97,17 @@ outputType = "console"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "WORKER_WORKLOAD=media bash artifacts/pipeline/run-worker.sh"
+
+[[workflows.workflow]]
+name = "StoryForge Worker Audio"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "WORKER_WORKLOAD=audio bash artifacts/pipeline/run-worker-audio.sh"
 
 [agent]
 stack = "BEST_EFFORT_FALLBACK"

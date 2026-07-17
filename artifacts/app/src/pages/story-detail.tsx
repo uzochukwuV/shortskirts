@@ -1,807 +1,651 @@
-import { useState, useEffect, useRef } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useRoute, Link } from "wouter";
-import { api, Story, Character, Episode, Scene, GenerationJob } from "@/lib/api";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, useLocation, useRoute } from "wouter";
+import {
+  ArrowLeft,
+  CheckCircle2,
+  Clock3,
+  Loader2,
+  Lock,
+  MessageSquareText,
+  RefreshCw,
+  Send,
+  ShieldCheck,
+  ThumbsDown,
+  ThumbsUp,
+  Video,
+  WandSparkles,
+} from "lucide-react";
 import { Layout } from "@/components/layout";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  ChevronLeft, Play, Download, User, Film, BookOpen, AlertCircle,
-  Loader2, CheckCircle2, Circle, Zap, Users, Clapperboard, Package,
-  Clock, Lock, RefreshCw, ThumbsUp, ThumbsDown, Video, ShieldCheck,
-  RotateCcw,
-} from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { api, Character, HistoryEntry, Scene, Story } from "@/lib/api";
 
-// ─── Pipeline stage inference ──────────────────────────────────────────────
+type ChatMessage = {
+  role: "assistant" | "user";
+  text: string;
+};
 
-type Stage = "plan" | "characters" | "scenes" | "assembly" | "done";
-const STAGES: { id: Stage; label: string; icon: React.ReactNode }[] = [
-  { id: "plan",       label: "Plan",       icon: <Zap className="h-3.5 w-3.5" /> },
-  { id: "characters", label: "Characters", icon: <Users className="h-3.5 w-3.5" /> },
-  { id: "scenes",     label: "Scenes",     icon: <Clapperboard className="h-3.5 w-3.5" /> },
-  { id: "assembly",   label: "Assembly",   icon: <Package className="h-3.5 w-3.5" /> },
-  { id: "done",       label: "Done",       icon: <CheckCircle2 className="h-3.5 w-3.5" /> },
-];
-
-function inferStage(job: GenerationJob): Stage {
-  if (job.status === "completed") return "done";
-  const s = (job.current_step || "").toLowerCase();
-  if (s.includes("assembl")) return "assembly";
-  if (s.includes("scene") || s.includes("clip") || s.includes("render")) return "scenes";
-  if (s.includes("char") || s.includes("ref") || s.includes("image")) return "characters";
-  return "plan";
+function storyTone(status: Story["status"]) {
+  switch (status) {
+    case "draft":
+      return "border-amber-200 bg-amber-50 text-amber-700";
+    case "approved":
+      return "border-border bg-muted text-foreground";
+    case "generating":
+      return "border-[color:#96ff1a] bg-[color:#f5ffd8] text-[color:#083300]";
+    case "checkpoint_review":
+      return "border-[color:#96ff1a] bg-white text-[color:#083300]";
+    case "completed":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    default:
+      return "border-border bg-white text-foreground";
+  }
 }
 
-function stageIdx(s: Stage) { return STAGES.findIndex(x => x.id === s); }
-function fmt(sec: number) { const m = Math.floor(sec / 60); return m > 0 ? `${m}m ${sec % 60}s` : `${sec}s`; }
-
-// ─── Pipeline progress panel ────────────────────────────────────────────────
-
-function PipelinePanel({ job, completedScenes, totalScenes }: {
-  job: GenerationJob; completedScenes: number; totalScenes: number;
-}) {
-  const [elapsed, setElapsed] = useState(0);
-  const t0 = useRef(Date.now());
-  useEffect(() => {
-    t0.current = Date.now();
-    const id = setInterval(() => setElapsed(Math.floor((Date.now() - t0.current) / 1000)), 1000);
-    return () => clearInterval(id);
-  }, [job.id]);
-
-  const currentStage = inferStage(job);
-  const ci = stageIdx(currentStage);
-  const pct = job.total_steps > 0 ? Math.round((job.progress / job.total_steps) * 100) : 0;
-
-  return (
-    <div className="mt-5 rounded-xl border border-border bg-muted overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/60">
-        <div className="flex items-center gap-2">
-          <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute h-full w-full rounded-full bg-[color:#ff5a00] opacity-75" />
-            <span className="relative rounded-full h-2 w-2 bg-foreground" />
-          </span>
-          <span className="text-xs font-semibold text-foreground uppercase tracking-wider">Pipeline Active</span>
-        </div>
-        <div className="flex items-center gap-4 text-xs text-foreground">
-          <span className="flex items-center gap-1"><Clock className="h-3 w-3" /> {fmt(elapsed)}</span>
-          <span className="font-bold">{pct}%</span>
-        </div>
-      </div>
-
-      <div className="px-4 pt-3">
-        <Progress value={pct} className="h-1.5 bg-border" />
-        <p className="text-xs text-foreground mt-1.5 font-mono truncate">{job.current_step || "Initialising…"}</p>
-      </div>
-
-      <div className="px-4 pb-4 pt-3 grid grid-cols-5 gap-1">
-        {STAGES.map((stage, idx) => {
-          const done = idx < ci;
-          const active = idx === ci && job.status !== "completed";
-          const all = job.status === "completed";
-          return (
-            <div key={stage.id} className="flex flex-col items-center gap-1.5">
-              <div className="flex items-center w-full">
-                {idx > 0 && <div className={`flex-1 h-px ${done || all ? "bg-foreground" : "bg-border"}`} />}
-                <div className={`flex items-center justify-center w-7 h-7 rounded-full border transition-all ${
-                  all || done ? "bg-foreground border-border text-white"
-                  : active    ? "bg-white border-border text-[color:#ff5a00] ring-2 ring-border"
-                              : "bg-white border-border text-muted-foreground"
-                }`}>
-                  {active ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  : done || all ? <CheckCircle2 className="h-3.5 w-3.5" />
-                  : <Circle className="h-3.5 w-3.5" />}
-                </div>
-                {idx < STAGES.length - 1 && <div className={`flex-1 h-px ${done || all ? "bg-foreground" : "bg-border"}`} />}
-              </div>
-              <span className={`text-[9px] font-semibold uppercase tracking-wider text-center ${
-                active ? "text-foreground" : done || all ? "text-[color:#ff5a00]" : "text-muted-foreground"
-              }`}>{stage.label}</span>
-            </div>
-          );
-        })}
-      </div>
-
-      {(currentStage === "scenes" || currentStage === "assembly") && totalScenes > 0 && (
-        <div className="px-4 py-3 border-t border-border bg-muted/40 flex justify-between text-xs text-foreground">
-          <span>Scenes Rendered</span>
-          <div className="flex items-center gap-2">
-            <div className="flex gap-1">
-              {Array.from({ length: totalScenes }).map((_, i) => (
-                <div key={i} className={`h-1.5 w-5 rounded-full ${i < completedScenes ? "bg-foreground" : "bg-border"}`} />
-              ))}
-            </div>
-            <span className="font-bold">{completedScenes}/{totalScenes}</span>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+function sceneTone(status: string, approval: string) {
+  if (approval === "approved") return "border-emerald-200 bg-emerald-50";
+  if (approval === "rejected") return "border-rose-200 bg-rose-50";
+  if (status === "running") return "border-[color:#96ff1a] bg-[color:#f5ffd8]";
+  return "border-border bg-white";
 }
 
-// ─── Approval gate UI ─────────────────────────────────────────────────────────
-
-function ApprovalGate({ story, onApprove, isApproving }: {
-  story: Story; onApprove: () => void; isApproving: boolean;
-}) {
-  const plan = story.episode_plan;
-  return (
-    <div className="mt-5 border border-amber-200 bg-amber-50 rounded-xl overflow-hidden">
-      <div className="px-5 py-3 bg-amber-100 border-b border-amber-200 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <ShieldCheck className="h-4 w-4 text-amber-600" />
-          <span className="text-sm font-semibold text-amber-800">Outline ready — your approval required</span>
-        </div>
-        <Badge className="bg-amber-200 text-amber-700 border-amber-300 text-[10px]">Approval Gate</Badge>
-      </div>
-
-      <div className="p-5 space-y-4">
-        {plan && (
-          <div className="space-y-3 text-sm">
-            <p className="text-gray-700 leading-relaxed"><strong>Synopsis:</strong> {plan.synopsis}</p>
-            {plan.characters?.length > 0 && (
-              <div>
-                <p className="font-medium text-gray-600 mb-1">Cast ({plan.characters.length})</p>
-                <div className="flex flex-wrap gap-2">
-                  {plan.characters.map((c: any) => (
-                    <span key={c.name} className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-gray-200 rounded-full text-xs text-gray-600">
-                      <User className="h-3 w-3 text-[color:#ff5a00]" /> {c.name}
-                      <span className="text-gray-400">· {c.role}</span>
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-            {plan.episodes?.map((ep: any) => (
-              <div key={ep.episode_number} className="bg-white border border-gray-200 rounded-lg p-3">
-                <p className="font-medium text-gray-800 text-xs mb-1">
-                  Episode {ep.episode_number}: {ep.title}
-                </p>
-                <p className="text-xs text-gray-500 leading-relaxed">{ep.summary}</p>
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {ep.scenes?.map((sc: any) => (
-                    <span key={sc.scene_number} className="text-[10px] bg-gray-100 text-gray-500 px-2 py-0.5 rounded">
-                      {sc.title || `Scene ${sc.scene_number}`}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="flex items-center gap-3 pt-2">
-          <Button
-            onClick={onApprove}
-            disabled={isApproving}
-            className="bg-gray-900 hover:bg-gray-700 text-white font-medium px-5 h-9 rounded-lg text-sm"
-          >
-            {isApproving
-              ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Approving…</>
-              : <><CheckCircle2 className="mr-2 h-4 w-4" /> Approve Outline & Unlock Generation</>}
-          </Button>
-          <span className="text-xs text-gray-400">No video renders until you approve.</span>
-        </div>
-      </div>
-    </div>
-  );
+function formatShortDate(value?: string | null) {
+  if (!value) return "";
+  return new Date(value).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
 }
 
-// ─── Scene card with granular actions ────────────────────────────────────────
-
-function SceneCard({ scene, story, onRegenerate, onApprove, onReject, onLock }: {
-  scene: Scene; story: Story;
-  onRegenerate: () => void;
-  onApprove: () => void;
-  onReject: () => void;
-  onLock: () => void;
+function SceneTile({
+  scene,
+  active,
+  onClick,
+}: {
+  scene: Scene;
+  active: boolean;
+  onClick: () => void;
 }) {
-  const isGenerating = scene.status === "running";
-  const hasMedia = !!(scene.image_url || scene.video_url || scene.clip_url);
-  const mediaSrc = scene.image_url || scene.video_url || scene.clip_url;
-  const mediaKind = scene.media_kind || (scene.image_url ? "image" : "video");
+  const media = scene.image_url || scene.clip_url || scene.video_url;
+  const kind = scene.media_kind || (scene.image_url ? "image" : "video");
 
   return (
-    <div className={`border rounded-xl overflow-hidden bg-white transition-all ${
-      scene.approval_status === "approved" ? "border-green-200" :
-      scene.approval_status === "rejected" ? "border-red-200" :
-      "border-gray-200"
-    }`}>
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-b border-gray-200">
-        <div className="flex items-center gap-2">
-          <Badge variant="outline" className="font-mono text-[10px] bg-white">
-            SCENE {String(scene.scene_number).padStart(3, "0")}
-          </Badge>
-          <span className="font-medium text-gray-900 text-sm">{scene.title || `Scene ${scene.scene_number}`}</span>
-          {scene.locked && <Lock className="h-3.5 w-3.5 text-gray-400" />}
-          {scene.regeneration_count > 0 && (
-            <span className="text-[10px] text-gray-400">· {scene.regeneration_count}× regen</span>
-          )}
-        </div>
-        <div className="flex items-center gap-1.5">
-          {/* Status badge */}
-          {scene.approval_status === "approved" && (
-            <span className="flex items-center gap-1 text-[10px] font-medium text-green-600 bg-green-50 border border-green-200 rounded-full px-2 py-0.5">
-              <CheckCircle2 className="h-3 w-3" /> Approved
-            </span>
-          )}
-          {scene.approval_status === "rejected" && (
-            <span className="text-[10px] font-medium text-red-600 bg-red-50 border border-red-200 rounded-full px-2 py-0.5">
-              Rejected
-            </span>
-          )}
-          {scene.mood && (
-            <span className="text-[10px] text-gray-400 bg-white border border-gray-200 rounded-full px-2 py-0.5">
-              {scene.mood}
-            </span>
-          )}
-          {scene.location && (
-            <span className="text-[10px] text-gray-400 bg-white border border-gray-200 rounded-full px-2 py-0.5">
-              {scene.location}
-            </span>
-          )}
-        </div>
-      </div>
-
-      <div className="grid md:grid-cols-2 gap-0 divide-y md:divide-y-0 md:divide-x divide-gray-200">
-        {/* Left: scene info */}
-        <div className="p-4 space-y-3">
-          {scene.description && (
-            <div>
-              <div className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-1">Action</div>
-              <p className="text-sm text-gray-700 leading-relaxed">{scene.description}</p>
-            </div>
-          )}
-          {scene.visual_prompt && (
-            <div>
-              <div className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-1">Visual Prompt</div>
-              <p className="text-xs text-gray-500 font-mono bg-gray-50 border border-gray-200 p-2 rounded-lg leading-relaxed">
-                {scene.visual_prompt}
-              </p>
-            </div>
-          )}
-          {/* Action buttons */}
-          {hasMedia && !scene.locked && (
-            <div className="pt-2 flex flex-wrap gap-2">
-              <Button size="sm" variant="outline"
-                onClick={onApprove}
-                disabled={scene.approval_status === "approved"}
-                className="h-7 text-xs border-green-200 text-green-700 hover:bg-green-50 rounded-lg">
-                <ThumbsUp className="h-3 w-3 mr-1" /> Approve
-              </Button>
-              <Button size="sm" variant="outline"
-                onClick={onReject}
-                disabled={scene.approval_status === "rejected"}
-                className="h-7 text-xs border-red-200 text-red-600 hover:bg-red-50 rounded-lg">
-                <ThumbsDown className="h-3 w-3 mr-1" /> Reject
-              </Button>
-              <Button size="sm" variant="outline"
-                onClick={onRegenerate}
-                disabled={isGenerating}
-                className="h-7 text-xs border-gray-200 text-gray-600 hover:bg-gray-50 rounded-lg">
-                {isGenerating
-                  ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Regenerating</>
-                  : <><RefreshCw className="h-3 w-3 mr-1" /> Regenerate</>}
-              </Button>
-              {scene.approval_status === "approved" && (
-                <Button size="sm" variant="outline" onClick={onLock}
-                  className="h-7 text-xs border-gray-200 text-gray-500 hover:bg-gray-50 rounded-lg">
-                  <Lock className="h-3 w-3 mr-1" /> Lock
-                </Button>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Right: media */}
-        <div className="p-4 flex flex-col justify-center items-center bg-gray-50 min-h-[200px] relative group">
-          {isGenerating ? (
-            <div className="flex flex-col items-center gap-2 text-gray-400">
-              <Loader2 className="h-8 w-8 animate-spin text-[color:#ff5a00]" />
-              <span className="text-xs">Regenerating…</span>
-            </div>
-          ) : hasMedia ? (
-            <>
-              {mediaKind === "image" ? (
-                <img src={mediaSrc} alt={scene.title || `Scene ${scene.scene_number}`} className="w-full rounded-lg max-h-[220px] object-contain bg-white" />
-              ) : (
-                <video src={mediaSrc} controls className="w-full rounded-lg max-h-[220px] object-contain" />
-              )}
-              <a href={mediaSrc} download
-                className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity bg-white border border-gray-200 text-gray-600 hover:text-gray-900 p-1.5 rounded-lg shadow-sm">
-                <Download className="h-3.5 w-3.5" />
-              </a>
-            </>
-          ) : story.status === "generating" ? (
-            <div className="flex flex-col items-center gap-2 text-gray-400">
-              <Loader2 className="h-8 w-8 animate-spin text-gray-300" />
-              <span className="text-xs">Awaiting render</span>
-            </div>
+    <button
+      type="button"
+      onClick={onClick}
+      className={`group min-w-[180px] max-w-[180px] shrink-0 snap-start overflow-hidden rounded-[16px] border text-left transition-all ${
+        active ? "border-[color:#083300] shadow-[0_0_0_1px_rgba(8,51,0,0.14)]" : "border-border hover:border-[color:#96ff1a]"
+      }`}
+    >
+      <div className="relative aspect-[16/10] bg-[color:#121212]">
+        {media ? (
+          kind === "image" ? (
+            <img src={media} alt={scene.title || `Scene ${scene.scene_number}`} className="h-full w-full object-cover" />
           ) : (
-            <div className="flex flex-col items-center gap-2 text-gray-300">
-              <Video className="h-8 w-8" />
-              <span className="text-xs">No render yet</span>
-              {!scene.locked && (
-                <Button size="sm" variant="outline" onClick={onRegenerate}
-                  className="mt-2 h-7 text-xs border-border text-foreground hover:bg-muted rounded-lg">
-                  <RotateCcw className="h-3 w-3 mr-1" /> Generate this scene
-                </Button>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Character card with approval + regen ────────────────────────────────────
-
-function CharacterCard({ char, onApprove, onLock, onRegenRefs }: {
-  char: Character;
-  onApprove: () => void;
-  onLock: () => void;
-  onRegenRefs: () => void;
-}) {
-  return (
-    <div className={`bg-white border rounded-2xl overflow-hidden transition-all ${
-      char.approval_status === "approved" ? "border-green-200" : "border-gray-200"
-    }`}>
-      {/* Ref image */}
-      <div className="aspect-[4/3] bg-gray-100 relative overflow-hidden">
-        {char.ref_image_urls?.[0] ? (
-          <img src={char.ref_image_urls[0]} alt={char.name} className="w-full h-full object-cover" />
+            <video src={media} className="h-full w-full object-cover" muted playsInline preload="metadata" />
+          )
         ) : (
-          <div className="w-full h-full flex items-center justify-center">
-            <User className="h-10 w-10 text-gray-300" />
+          <div className="flex h-full items-center justify-center text-white/30">
+            <Video className="h-8 w-8" />
           </div>
         )}
-        <div className="absolute inset-0 bg-gradient-to-t from-gray-900/40 to-transparent" />
-        {char.approval_status === "approved" && (
-          <div className="absolute top-2 right-2 bg-green-500 text-white rounded-full p-0.5">
-            <CheckCircle2 className="h-3.5 w-3.5" />
-          </div>
-        )}
-        {char.locked && (
-          <div className="absolute top-2 left-2 bg-gray-800/70 text-white rounded-full p-1">
-            <Lock className="h-3 w-3" />
-          </div>
-        )}
-      </div>
-
-      <div className="p-4">
-        <div className="flex items-start justify-between mb-1">
-          <h3 className="font-semibold text-gray-900">{char.name}</h3>
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-[color:#ff5a00] bg-muted border border-border px-2 py-0.5 rounded-full">
-            {char.role}
-          </span>
+        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
+        <div className="absolute left-2 top-2 rounded-[9999px] border border-white/10 bg-black/50 px-2 py-0.5 text-[10px] text-white">
+          S{scene.scene_number}
         </div>
-        <p className="text-xs text-gray-500 line-clamp-2 mb-3 leading-relaxed">{char.description}</p>
-        {char.appearance && (
-          <p className="text-[11px] text-gray-400 line-clamp-1 mb-3">{char.appearance}</p>
-        )}
+        <div className="absolute bottom-2 left-2 right-2">
+          <div className="line-clamp-2 text-[12px] font-medium text-white">{scene.title || `Scene ${scene.scene_number}`}</div>
+        </div>
+      </div>
+    </button>
+  );
+}
 
-        {/* Ref thumbnails */}
-        {char.ref_image_urls?.length > 1 && (
-          <div className="flex gap-1 mb-3">
-            {char.ref_image_urls.slice(0, 3).map((url, i) => (
-              <img key={i} src={url} alt="" className="h-10 w-10 rounded-lg object-cover border border-gray-200" />
-            ))}
-          </div>
-        )}
-
-        {/* Actions */}
-        {!char.locked && (
-          <div className="flex flex-wrap gap-1.5">
-            {char.approval_status !== "approved" && (
-              <Button size="sm" variant="outline" onClick={onApprove}
-                className="h-7 text-xs border-green-200 text-green-700 hover:bg-green-50 rounded-lg">
-                <ThumbsUp className="h-3 w-3 mr-1" /> Approve
-              </Button>
-            )}
-            <Button size="sm" variant="outline" onClick={onRegenRefs}
-              className="h-7 text-xs border-gray-200 text-gray-600 hover:bg-gray-50 rounded-lg">
-              <RefreshCw className="h-3 w-3 mr-1" /> New Refs
-            </Button>
-            {char.approval_status === "approved" && (
-              <Button size="sm" variant="outline" onClick={onLock}
-                className="h-7 text-xs border-gray-200 text-gray-500 hover:bg-gray-50 rounded-lg">
-                <Lock className="h-3 w-3 mr-1" /> Lock
-              </Button>
-            )}
-          </div>
-        )}
+function HistoryLine({ entry }: { entry: HistoryEntry }) {
+  return (
+    <div className="flex items-start gap-3 rounded-[14px] border border-border bg-white px-3 py-2">
+      <div className="mt-1 h-2 w-2 rounded-full bg-[color:#96ff1a]" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center justify-between gap-3">
+          <div className="truncate text-xs font-medium text-foreground">{entry.event_type}</div>
+          <div className="text-[10px] text-muted-foreground">v{entry.revision}</div>
+        </div>
+        <div className="mt-1 text-[11px] text-muted-foreground">
+          {formatShortDate(entry.created_at)}
+        </div>
       </div>
     </div>
   );
 }
-
-// ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function StoryDetail() {
   const [, params] = useRoute("/stories/:id");
-  const id = params?.id || "";
+  const [, setLocation] = useLocation();
   const qc = useQueryClient();
-  const [activeEp, setActiveEp] = useState<string>("");
+  const id = params?.id || "";
+  const [selectedSceneId, setSelectedSceneId] = useState<string>("");
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [prompt, setPrompt] = useState("");
 
-  const isGenerating = (s?: string) => s === "generating";
-  const needsApproval = (s?: string) => s === "draft";
-
-  const { data: story, isLoading: loadingStory } = useQuery({
+  const { data: story, isLoading: storyLoading } = useQuery({
     queryKey: ["story", id],
     queryFn: () => api.getStory(id),
     enabled: !!id,
-    refetchInterval: query => (isGenerating(query.state.data?.status) ? 5000 : false),
+    refetchInterval: (query) =>
+      query.state.data?.status === "generating" || query.state.data?.status === "checkpoint_review" ? 5000 : false,
   });
 
-  const { data: characters } = useQuery({
+  const { data: characters = [] } = useQuery({
     queryKey: ["characters", id],
     queryFn: () => api.getCharacters(id),
     enabled: !!id,
-    refetchInterval: isGenerating(story?.status) ? 8000 : false,
   });
 
-  const { data: episodes } = useQuery({
+  const { data: episodes = [] } = useQuery({
     queryKey: ["episodes", id],
     queryFn: () => api.getEpisodes(id),
     enabled: !!id,
-    refetchInterval: isGenerating(story?.status) ? 5000 : false,
+    refetchInterval: story?.status === "generating" || story?.status === "checkpoint_review" ? 5000 : false,
   });
 
-  const { data: jobs } = useQuery({
-    queryKey: ["jobs", "story", id],
-    queryFn: () => api.getEntityJobs("story", id),
-    enabled: !!id && isGenerating(story?.status),
-    refetchInterval: 4000,
+  const { data: storyHistory = [] } = useQuery({
+    queryKey: ["story-history", id],
+    queryFn: () => api.getStoryHistory(id),
+    enabled: !!id,
   });
 
-  const activeJob = jobs?.find(j => j.status === "running" || j.status === "pending");
-
-  const { data: liveJob } = useQuery({
-    queryKey: ["job", activeJob?.id],
-    queryFn: () => api.getJob(activeJob!.id),
-    refetchInterval: 3000,
-    enabled: !!activeJob?.id,
+  const { data: checkpoints = [] } = useQuery({
+    queryKey: ["checkpoints", id],
+    queryFn: () => api.getStoryCheckpoints(id),
+    enabled: !!id,
+    refetchInterval: story?.status === "checkpoint_review" ? 5000 : false,
   });
+
+  const allScenes = useMemo(() => episodes.flatMap((episode) => episode.scenes ?? []), [episodes]);
+  const selectedScene = useMemo(
+    () => allScenes.find((scene) => scene.id === selectedSceneId) ?? allScenes[0] ?? null,
+    [allScenes, selectedSceneId],
+  );
 
   useEffect(() => {
-    if (liveJob?.status === "completed" || liveJob?.status === "failed") {
-      qc.invalidateQueries({ queryKey: ["story", id] });
-      qc.invalidateQueries({ queryKey: ["episodes", id] });
-      qc.invalidateQueries({ queryKey: ["characters", id] });
+    if (!selectedSceneId && allScenes.length > 0) {
+      setSelectedSceneId(allScenes[0].id);
     }
-  }, [liveJob?.status, id, qc]);
+  }, [allScenes, selectedSceneId]);
 
-  const approveMutation = useMutation({
+  const { data: sceneHistory = [] } = useQuery({
+    queryKey: ["scene-history", selectedScene?.id],
+    queryFn: () => api.getSceneHistory(selectedScene!.id),
+    enabled: !!selectedScene?.id,
+  });
+
+  const latestAudioCheckpoint = useMemo(
+    () =>
+      [...checkpoints]
+        .filter((checkpoint) => checkpoint.narration_audio_url || checkpoint.audio_status === "completed")
+        .sort((a, b) => (a.batch_number || 0) - (b.batch_number || 0))
+        .slice(-1)[0] ?? null,
+    [checkpoints],
+  );
+
+  const activeCheckpoint = checkpoints.find((checkpoint) => checkpoint.status === "pending_review") ?? null;
+  const checkpointAudioReady =
+    !activeCheckpoint?.audio_status ||
+    activeCheckpoint.audio_status === "completed" ||
+    activeCheckpoint.audio_status === "failed";
+
+  const approveOutline = useMutation({
     mutationFn: () => api.approveOutline(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["story", id] }),
   });
 
-  const generateMutation = useMutation({
+  const generateStory = useMutation({
     mutationFn: () => api.generateStory(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["story", id] });
-      qc.invalidateQueries({ queryKey: ["jobs", "story", id] });
+      qc.invalidateQueries({ queryKey: ["episodes", id] });
     },
   });
 
-  const sceneRegenMutation = useMutation({
-    mutationFn: (sceneId: string) => api.regenerateScene(sceneId),
-    onSuccess: () => setTimeout(() => qc.invalidateQueries({ queryKey: ["episodes", id] }), 2000),
+  const approveCheckpoint = useMutation({
+    mutationFn: (checkpointId: string) => api.approveCheckpoint(id, checkpointId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["story", id] });
+      qc.invalidateQueries({ queryKey: ["checkpoints", id] });
+    },
   });
 
-  const sceneApproveMutation = useMutation({
+  const approveScene = useMutation({
     mutationFn: (sceneId: string) => api.approveScene(sceneId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["episodes", id] }),
   });
 
-  const sceneRejectMutation = useMutation({
+  const rejectScene = useMutation({
     mutationFn: (sceneId: string) => api.rejectScene(sceneId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["episodes", id] }),
   });
 
-  const sceneLockMutation = useMutation({
+  const lockScene = useMutation({
     mutationFn: (sceneId: string) => api.lockScene(sceneId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["episodes", id] }),
   });
 
-  const charApproveMutation = useMutation({
-    mutationFn: (charId: string) => api.approveCharacter(charId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["characters", id] }),
-  });
-
-  const charLockMutation = useMutation({
-    mutationFn: (charId: string) => api.lockCharacter(charId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["characters", id] }),
-  });
-
-  const charRegenMutation = useMutation({
-    mutationFn: (charId: string) => api.regenerateCharacterRefs(charId),
-    onSuccess: () => setTimeout(() => qc.invalidateQueries({ queryKey: ["characters", id] }), 5000),
+  const regenerateScene = useMutation({
+    mutationFn: (sceneId: string) => api.regenerateScene(sceneId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["episodes", id] });
+    },
   });
 
   useEffect(() => {
-    if (episodes?.length && !activeEp) setActiveEp(episodes[0].id);
-  }, [episodes, activeEp]);
+    if (!story || messages.length > 0) return;
+    setMessages([
+      {
+        role: "assistant",
+        text: `Console ready for ${story.title}. Select a scene, approve the outline, or regenerate the current frame.`,
+      },
+    ]);
+  }, [story, messages.length]);
 
-  const allScenes = episodes?.flatMap(e => e.scenes ?? []) ?? [];
-  const completedScenes = allScenes.filter(s => s.image_url || s.video_url || s.clip_url).length;
-  const displayJob = liveJob ?? activeJob;
+  const sendMessage = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setMessages((prev) => [...prev, { role: "user", text: trimmed }]);
+    const lower = trimmed.toLowerCase();
 
-  if (loadingStory) {
+    if (lower.includes("approve outline") && story?.status === "draft") {
+      approveOutline.mutate();
+      setMessages((prev) => [...prev, { role: "assistant", text: "Outline approval queued." }]);
+      return;
+    }
+    if (lower.includes("approve checkpoint") && activeCheckpoint?.id && checkpointAudioReady) {
+      approveCheckpoint.mutate(activeCheckpoint.id);
+      setMessages((prev) => [...prev, { role: "assistant", text: "Checkpoint approval queued." }]);
+      return;
+    }
+    if (lower.includes("generate story") || lower === "generate") {
+      generateStory.mutate();
+      setMessages((prev) => [...prev, { role: "assistant", text: "Story generation queued." }]);
+      return;
+    }
+    if (lower.includes("approve scene") && selectedScene) {
+      approveScene.mutate(selectedScene.id);
+      setMessages((prev) => [...prev, { role: "assistant", text: `Scene ${selectedScene.scene_number} approval queued.` }]);
+      return;
+    }
+    if (lower.includes("reject scene") && selectedScene) {
+      rejectScene.mutate(selectedScene.id);
+      setMessages((prev) => [...prev, { role: "assistant", text: `Scene ${selectedScene.scene_number} rejection queued.` }]);
+      return;
+    }
+    if (lower.includes("regenerate") && selectedScene) {
+      regenerateScene.mutate(selectedScene.id);
+      setMessages((prev) => [...prev, { role: "assistant", text: `Scene ${selectedScene.scene_number} regeneration queued.` }]);
+      return;
+    }
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: "assistant",
+        text: selectedScene
+          ? `Focused on ${selectedScene.title || `Scene ${selectedScene.scene_number}`}. I can approve, regenerate, or lock the current version.`
+          : "Pick a scene to inspect it here.",
+      },
+    ]);
+  };
+
+  const onSubmitPrompt = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    sendMessage(prompt);
+    setPrompt("");
+  };
+
+  const currentMedia = selectedScene?.image_url || selectedScene?.clip_url || selectedScene?.video_url;
+  const currentKind = selectedScene?.media_kind || (selectedScene?.image_url ? "image" : "video");
+
+  if (storyLoading) {
     return (
       <Layout>
-        <div className="container p-8 flex justify-center">
-          <Loader2 className="h-6 w-6 animate-spin text-[color:#ff5a00]" />
+        <div className="min-h-[60vh] bg-white" />
+      </Layout>
+    );
+  }
+
+  if (!story) {
+    return (
+      <Layout>
+        <div className="mx-auto max-w-[1200px] px-4 py-20 md:px-6">
+          <div className="rounded-[16px] border border-border bg-white p-8 text-sm text-muted-foreground">
+            Story not found.
+          </div>
         </div>
       </Layout>
     );
   }
 
-  if (!story) return <Layout><div className="p-8 text-gray-500">Story not found.</div></Layout>;
-
-  const statusColor: Record<string, string> = {
-    draft:      "bg-amber-50 text-amber-700 border-amber-200",
-    approved:   "bg-blue-50 text-foreground border-border",
-    generating: "bg-muted text-foreground border-border",
-    completed:  "bg-green-50 text-green-700 border-green-200",
-    ready:      "bg-green-50 text-green-700 border-green-200",
-    failed:     "bg-red-50 text-red-700 border-red-200",
-  };
-
   return (
     <Layout>
-      {/* ── Header ── */}
-      <div className="border-b border-gray-100 bg-white">
-        <div className="container px-4 md:px-6 py-5 max-w-7xl mx-auto">
-          <div className="flex items-center gap-2 text-sm text-gray-400 mb-4">
-            <Link href="/dashboard" className="hover:text-foreground flex items-center transition-colors">
-              <ChevronLeft className="h-4 w-4 mr-0.5" /> Dashboard
-            </Link>
-            <span>/</span>
-            <span className="text-gray-600">Production Workspace</span>
-          </div>
+      <div className="bg-white">
+        <section className="border-b border-border">
+          <div className="mx-auto flex max-w-[1200px] flex-col gap-4 px-4 py-8 md:px-6">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <Link href="/dashboard">
+                  <Button variant="ghost" size="sm" className="px-2">
+                    <ArrowLeft className="h-4 w-4" />
+                    Dashboard
+                  </Button>
+                </Link>
+                <div className="min-w-0">
+                  <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
+                    {story.workflow_type}
+                  </div>
+                  <h1 className="truncate font-display text-[40px] leading-[1] tracking-[-0.04em] text-foreground md:text-[54px]">
+                    {story.title}
+                  </h1>
+                </div>
+              </div>
 
-          <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-            <div className="flex-1">
-              <div className="flex items-center gap-2 mb-1">
-                <h1 className="text-2xl font-bold text-gray-900">{story.title}</h1>
-                <Badge className={`border text-[10px] font-semibold uppercase px-2 py-0.5 ${statusColor[story.status] || "bg-gray-100 text-gray-500"}`}>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className={`inline-flex items-center rounded-[9999px] border px-3 py-1.5 text-[11px] font-medium ${storyTone(story.status)}`}>
                   {story.status}
-                </Badge>
+                </div>
+                {story.status === "draft" && (
+                  <Button variant="lime" onClick={() => approveOutline.mutate()} disabled={approveOutline.isPending}>
+                    {approveOutline.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+                    Approve outline
+                  </Button>
+                )}
+                {story.status === "approved" && (
+                  <Button variant="lime" onClick={() => generateStory.mutate()} disabled={generateStory.isPending}>
+                    {generateStory.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}
+                    Generate
+                  </Button>
+                )}
+                {activeCheckpoint && (
+                  <Button
+                    variant="outline"
+                    onClick={() => approveCheckpoint.mutate(activeCheckpoint.id)}
+                    disabled={!checkpointAudioReady || approveCheckpoint.isPending}
+                  >
+                    {approveCheckpoint.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                    Approve checkpoint
+                  </Button>
+                )}
               </div>
-              <p className="text-gray-500 text-sm max-w-2xl leading-relaxed">{story.prompt}</p>
             </div>
 
-            <div className="flex gap-2 shrink-0">
-              {story.status === "approved" && (
-                <Button
-                  onClick={() => generateMutation.mutate()}
-                  disabled={generateMutation.isPending}
-                  className="bg-gray-900 hover:bg-gray-700 text-white h-9 px-4 rounded-lg text-sm font-medium"
-                >
-                  {generateMutation.isPending
-                    ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Starting…</>
-                    : <><Play className="mr-2 h-4 w-4" /> Start Generation</>}
-                </Button>
-              )}
-              {(story.status === "completed" || story.status === "ready") && (
-                <Button variant="outline" className="h-9 px-4 rounded-lg text-sm border-gray-200 text-gray-600">
-                  <Download className="mr-2 h-4 w-4" /> Export
-                </Button>
-              )}
+            <p className="max-w-3xl text-[16px] leading-7 text-muted-foreground">
+              {story.prompt}
+            </p>
+
+            <div className="flex flex-wrap gap-2">
+              <Badge className="border-border bg-muted text-foreground">{story.workflow_version || "v1"}</Badge>
+              <Badge className="border-border bg-muted text-foreground">{story.generation_version || "v1"}</Badge>
+              <Badge className="border-border bg-muted text-foreground">{story.approval_status}</Badge>
             </div>
           </div>
+        </section>
 
-          {/* Approval gate */}
-          {needsApproval(story.status) && (
-            <ApprovalGate
-              story={story}
-              onApprove={() => approveMutation.mutate()}
-              isApproving={approveMutation.isPending}
-            />
-          )}
+        <section className="mx-auto grid max-w-[1200px] gap-6 px-4 py-8 md:px-6 lg:grid-cols-[360px_1fr]">
+          <aside className="space-y-4">
+            <div className="rounded-[16px] border border-border bg-[color:#121212] p-5 text-white">
+              <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.16em] text-white/60">
+                <MessageSquareText className="h-3.5 w-3.5 text-[color:#96ff1a]" />
+                AI chat
+              </div>
 
-          {/* Pipeline progress */}
-          {displayJob && (displayJob.status === "running" || displayJob.status === "pending") && (
-            <PipelinePanel
-              job={displayJob}
-              completedScenes={completedScenes}
-              totalScenes={allScenes.length}
-            />
-          )}
+              <div className="mt-4 flex h-[460px] flex-col gap-3 overflow-y-auto pr-1">
+                {messages.map((message, index) => (
+                  <div
+                    key={`${message.role}-${index}`}
+                    className={`max-w-[90%] rounded-[16px] px-4 py-3 text-sm leading-6 ${
+                      message.role === "assistant"
+                        ? "bg-white/8 border border-white/10 text-white"
+                        : "ml-auto bg-[color:#96ff1a] text-[color:#083300]"
+                    }`}
+                  >
+                    {message.text}
+                  </div>
+                ))}
+              </div>
 
-          {story.status === "failed" && (
-            <div className="mt-4 p-4 border border-red-200 bg-red-50 rounded-xl flex items-start gap-3">
-              <AlertCircle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
-              <div>
-                <p className="text-sm font-semibold text-red-700 mb-1">Generation failed</p>
-                <p className="text-xs text-red-500">Check server logs. Approve the outline again and retry.</p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {[
+                  "approve outline",
+                  "generate story",
+                  "approve scene",
+                  "regenerate",
+                ].map((chip) => (
+                  <button
+                    key={chip}
+                    type="button"
+                    onClick={() => {
+                      setPrompt(chip);
+                      sendMessage(chip);
+                    }}
+                    className="rounded-[9999px] border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] text-white/70 transition-colors hover:bg-white/10"
+                  >
+                    {chip}
+                  </button>
+                ))}
+              </div>
+
+              <form onSubmit={onSubmitPrompt} className="mt-4 flex gap-2">
+                <Input
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder="Ask the console to act"
+                  className="border-white/10 bg-white/5 text-white placeholder:text-white/40"
+                />
+                <Button type="submit" variant="lime" className="shrink-0">
+                  <Send className="h-4 w-4" />
+                </Button>
+              </form>
+            </div>
+
+            <div className="rounded-[16px] border border-border bg-white p-5">
+              <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">History</div>
+              <div className="mt-3 space-y-2">
+                {storyHistory.slice(0, 6).map((entry) => (
+                  <HistoryLine key={entry.id} entry={entry} />
+                ))}
               </div>
             </div>
-          )}
-        </div>
-      </div>
 
-      {/* ── Tabs ── */}
-      <div className="container px-4 md:px-6 py-6 max-w-7xl mx-auto">
-        <Tabs defaultValue="episodes">
-          <TabsList className="bg-gray-100 border border-gray-200 h-auto p-1 rounded-xl mb-6 w-full justify-start">
-            {[
-              { value: "episodes",   label: "Episodes & Scenes", icon: <Film className="h-4 w-4 mr-1.5" /> },
-              { value: "characters", label: `Cast (${characters?.length ?? 0})`, icon: <Users className="h-4 w-4 mr-1.5" /> },
-              { value: "plan",       label: "Master Plan", icon: <BookOpen className="h-4 w-4 mr-1.5" /> },
-            ].map(t => (
-              <TabsTrigger key={t.value} value={t.value}
-                className="data-[state=active]:bg-white data-[state=active]:shadow-sm text-sm flex items-center px-4 py-2 rounded-lg font-medium text-gray-500 data-[state=active]:text-gray-900">
-                {t.icon}{t.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-
-          {/* Episodes & Scenes */}
-          <TabsContent value="episodes" className="m-0">
-            {!episodes || episodes.length === 0 ? (
-              <div className="text-center py-20 border border-dashed border-gray-200 rounded-2xl text-gray-400">
-                <Clapperboard className="h-8 w-8 mx-auto mb-3 opacity-40" />
-                <p className="text-sm">
-                  {story.status === "draft"
-                    ? "Approve the outline above to unlock generation."
-                    : story.status === "approved"
-                    ? "Click 'Start Generation' to begin rendering."
-                    : "No episodes generated yet."}
-                </p>
+            <div className="rounded-[16px] border border-border bg-white p-5">
+              <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Cast</div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {characters.length > 0 ? characters.slice(0, 8).map((character: Character) => (
+                  <div
+                    key={character.id}
+                    className="rounded-[9999px] border border-border bg-muted px-3 py-1.5 text-[11px] text-foreground"
+                  >
+                    {character.name}
+                  </div>
+                )) : (
+                  <div className="text-sm text-muted-foreground">No characters yet.</div>
+                )}
               </div>
-            ) : (
-              <div className="grid md:grid-cols-12 gap-6">
-                {/* Episode list */}
-                <div className="md:col-span-3">
-                  <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-3 px-1">Episodes</p>
-                  <div className="space-y-1">
-                    {episodes.map(ep => {
-                      const epScenes = ep.scenes ?? [];
-                      const rendered = epScenes.filter(s => s.image_url || s.video_url || s.clip_url).length;
-                      const approved = epScenes.filter(s => s.approval_status === "approved").length;
-                      return (
-                        <button key={ep.id} onClick={() => setActiveEp(ep.id)}
-                          className={`w-full text-left px-3 py-3 rounded-xl border transition-all ${
-                            activeEp === ep.id
-                              ? "bg-muted border-border text-foreground"
-                              : "border-transparent text-gray-600 hover:bg-gray-50 hover:border-gray-200"
-                          }`}>
-                          <div className="text-[10px] font-mono uppercase text-gray-400 mb-0.5">Episode {ep.episode_number}</div>
-                          <div className="text-sm font-medium line-clamp-1">{ep.title}</div>
-                          <div className="mt-2 flex items-center gap-2">
-                            <div className="flex gap-0.5 flex-1">
-                              {epScenes.map((sc, i) => (
-                                <div key={i} className={`h-1 flex-1 rounded-full ${
-                                  sc.approval_status === "approved" ? "bg-green-400" :
-                                  sc.image_url || sc.video_url || sc.clip_url ? "bg-[color:#ff5a00]" : "bg-gray-200"
-                                }`} />
-                              ))}
-                            </div>
-                            <span className="text-[10px] text-gray-400">{approved}/{epScenes.length}</span>
-                          </div>
-                        </button>
-                      );
-                    })}
+            </div>
+          </aside>
+
+          <div className="space-y-5">
+            <div className="rounded-[16px] border border-border bg-white p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Generated parts</div>
+                  <div className="mt-1 text-sm text-foreground">
+                    {allScenes.length} scenes available
                   </div>
                 </div>
-
-                {/* Scenes */}
-                <div className="md:col-span-9">
-                  {(() => {
-                    const ep = episodes.find(e => e.id === activeEp);
-                    if (!ep) return null;
-                    return (
-                      <div className="space-y-5">
-                        <div className="border-b border-gray-100 pb-4">
-                          <h2 className="text-xl font-bold text-gray-900 mb-1">
-                            <span className="text-gray-400 mr-2 font-normal">Ep {ep.episode_number}</span>{ep.title}
-                          </h2>
-                          {ep.summary && <p className="text-sm text-gray-500 leading-relaxed">{ep.summary}</p>}
-                          {ep.assembled_video_url && (
-                            <a href={ep.assembled_video_url} target="_blank" rel="noreferrer"
-                              className="inline-flex items-center gap-2 mt-3 text-sm font-medium text-foreground hover:text-foreground">
-                              <Play className="h-4 w-4" /> Watch assembled episode
-                            </a>
-                          )}
-                        </div>
-
-                        {ep.scenes?.length ? ep.scenes.map((scene: Scene) => (
-                          <SceneCard key={scene.id} scene={scene} story={story}
-                            onRegenerate={() => sceneRegenMutation.mutate(scene.id)}
-                            onApprove={() => sceneApproveMutation.mutate(scene.id)}
-                            onReject={() => sceneRejectMutation.mutate(scene.id)}
-                            onLock={() => sceneLockMutation.mutate(scene.id)}
-                          />
-                        )) : (
-                          <div className="text-center py-12 border border-dashed border-gray-200 rounded-2xl text-gray-400 text-sm">
-                            Scenes will appear here once generation starts.
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()}
+                <div className="text-xs text-muted-foreground">
+                  {selectedScene ? `Selected scene ${selectedScene.scene_number}` : "No scene selected"}
                 </div>
               </div>
-            )}
-          </TabsContent>
-
-          {/* Characters */}
-          <TabsContent value="characters" className="m-0">
-            {!characters || characters.length === 0 ? (
-              <div className="text-center py-20 border border-dashed border-gray-200 rounded-2xl text-gray-400">
-                <Users className="h-8 w-8 mx-auto mb-3 opacity-40" />
-                <p className="text-sm">Characters will be materialised when you create the production.</p>
-              </div>
-            ) : (
-              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
-                {characters.map(char => (
-                  <CharacterCard key={char.id} char={char}
-                    onApprove={() => charApproveMutation.mutate(char.id)}
-                    onLock={() => charLockMutation.mutate(char.id)}
-                    onRegenRefs={() => charRegenMutation.mutate(char.id)}
+              <div className="mt-4 flex gap-3 overflow-x-auto pb-1 [scrollbar-width:none]">
+                {allScenes.map((scene) => (
+                  <SceneTile
+                    key={scene.id}
+                    scene={scene}
+                    active={scene.id === selectedScene?.id}
+                    onClick={() => setSelectedSceneId(scene.id)}
                   />
                 ))}
               </div>
-            )}
-          </TabsContent>
+            </div>
 
-          {/* Master Plan */}
-          <TabsContent value="plan" className="m-0">
-            {story.episode_plan ? (
-              <div className="bg-white border border-gray-200 rounded-2xl p-6 md:p-8 space-y-8 max-w-3xl">
-                <div>
-                  <h3 className="text-xs font-semibold uppercase tracking-widest text-[color:#ff5a00] mb-2">Synopsis</h3>
-                  <p className="text-gray-700 leading-relaxed text-base">{story.episode_plan.synopsis}</p>
+            <div className="rounded-[16px] border border-border bg-[color:#121212] p-4 text-white">
+              <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-4">
+                <div className="min-w-0">
+                  <div className="text-[11px] uppercase tracking-[0.16em] text-white/55">
+                    {selectedScene ? `Episode ${episodes.find((ep) => ep.scenes?.some((scene) => scene.id === selectedScene.id))?.episode_number ?? ""}` : "Preview"}
+                  </div>
+                  <h2 className="mt-1 truncate text-[20px] font-semibold text-white">
+                    {selectedScene?.title || "Select a scene"}
+                  </h2>
+                  <p className="mt-1 max-w-3xl text-sm leading-6 text-white/65">
+                    {selectedScene?.description || story.prompt}
+                  </p>
                 </div>
-                <div className="border-t border-gray-100 pt-6">
-                  <h3 className="text-xs font-semibold uppercase tracking-widest text-[color:#ff5a00] mb-2">Setting</h3>
-                  <p className="text-gray-700 leading-relaxed">{story.episode_plan.setting}</p>
-                </div>
-                {story.episode_plan.themes?.length > 0 && (
-                  <div className="border-t border-gray-100 pt-6">
-                    <h3 className="text-xs font-semibold uppercase tracking-widest text-[color:#ff5a00] mb-3">Themes</h3>
-                    <div className="flex flex-wrap gap-2">
-                      {story.episode_plan.themes.map((t: string, i: number) => (
-                        <span key={i} className="px-3 py-1 bg-muted border border-border text-foreground text-sm rounded-full">
-                          {t}
-                        </span>
-                      ))}
+
+                {selectedScene && (
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Button
+                      size="sm"
+                      variant="lime"
+                      onClick={() => approveScene.mutate(selectedScene.id)}
+                      disabled={approveScene.isPending || selectedScene.approval_status === "approved"}
+                    >
+                      {approveScene.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ThumbsUp className="h-4 w-4" />}
+                      Approve
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => rejectScene.mutate(selectedScene.id)}
+                      disabled={rejectScene.isPending || selectedScene.approval_status === "rejected"}
+                    >
+                      {rejectScene.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ThumbsDown className="h-4 w-4" />}
+                      Reject
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => regenerateScene.mutate(selectedScene.id)}
+                      disabled={regenerateScene.isPending}
+                    >
+                      {regenerateScene.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                      Regenerate
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => lockScene.mutate(selectedScene.id)}
+                      disabled={lockScene.isPending || !!selectedScene.locked}
+                    >
+                      <Lock className="h-4 w-4" />
+                      Lock
+                    </Button>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-4 overflow-hidden rounded-[14px] border border-white/10 bg-black">
+                {currentMedia ? (
+                  currentKind === "image" ? (
+                    <img
+                      src={currentMedia}
+                      alt={selectedScene?.title || "Selected scene"}
+                      className="aspect-video w-full object-contain bg-black"
+                    />
+                  ) : (
+                    <video
+                      src={currentMedia}
+                      className="aspect-video w-full object-contain bg-black"
+                      controls
+                      playsInline
+                      muted
+                      preload="metadata"
+                    />
+                  )
+                ) : (
+                  <div className="flex aspect-video items-center justify-center">
+                    <div className="text-center text-white/40">
+                      <Video className="mx-auto h-10 w-10" />
+                      <div className="mt-2 text-sm">No media on this scene yet</div>
                     </div>
                   </div>
                 )}
-                {story.episode_plan.episodes?.map((ep: any) => (
-                  <div key={ep.episode_number} className="border-t border-gray-100 pt-6">
-                    <h3 className="text-xs font-semibold uppercase tracking-widest text-[color:#ff5a00] mb-2">
-                      Episode {ep.episode_number}: {ep.title}
-                    </h3>
-                    <p className="text-sm text-gray-600 mb-3">{ep.summary}</p>
-                    <div className="space-y-2">
-                      {ep.scenes?.map((sc: any) => (
-                        <div key={sc.scene_number} className="bg-gray-50 border border-gray-200 rounded-xl p-3">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-[10px] font-mono text-gray-400">S{sc.scene_number}</span>
-                            <span className="text-sm font-medium text-gray-800">{sc.title}</span>
-                            {sc.mood && <span className="text-[10px] text-gray-400 bg-white border border-gray-200 rounded px-1.5 py-0.5">{sc.mood}</span>}
-                          </div>
-                          <p className="text-xs text-gray-500 leading-relaxed">{sc.description}</p>
-                        </div>
-                      ))}
-                    </div>
+              </div>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-4">
+                {[
+                  { label: "Version", value: selectedScene?.generation_version || story.generation_version || "v1" },
+                  { label: "Image model", value: selectedScene?.image_model || "-" },
+                  { label: "Edit model", value: selectedScene?.edit_model || "-" },
+                  { label: "Regen count", value: selectedScene?.regeneration_count ?? 0 },
+                ].map((item) => (
+                  <div key={item.label} className="rounded-[14px] border border-white/10 bg-white/5 px-4 py-3">
+                    <div className="text-[10px] uppercase tracking-[0.16em] text-white/45">{item.label}</div>
+                    <div className="mt-1 text-sm text-white">{item.value}</div>
                   </div>
                 ))}
               </div>
-            ) : (
-              <div className="text-center py-20 text-gray-400 text-sm">
-                No plan generated yet.
+
+              <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_320px]">
+                <div className="rounded-[14px] border border-white/10 bg-white/5 p-4">
+                  <div className="text-[11px] uppercase tracking-[0.16em] text-white/55">Selected scene history</div>
+                  <div className="mt-3 space-y-2">
+                    {sceneHistory.slice(0, 4).map((entry) => (
+                      <div
+                        key={entry.id}
+                        className="flex items-start justify-between gap-3 rounded-[12px] border border-white/10 bg-black/20 px-3 py-2 text-sm text-white/80"
+                      >
+                        <span className="truncate">{entry.event_type}</span>
+                        <span className="text-[10px] text-white/40">v{entry.revision}</span>
+                      </div>
+                    ))}
+                    {!sceneHistory.length && (
+                      <div className="text-sm text-white/45">No scene history yet.</div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="rounded-[14px] border border-white/10 bg-white/5 p-4">
+                  <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.16em] text-white/55">
+                    <Clock3 className="h-3.5 w-3.5" />
+                    Audio
+                  </div>
+                  {latestAudioCheckpoint?.narration_audio_url ? (
+                    <div className="mt-3 space-y-3">
+                      <audio controls className="w-full" src={latestAudioCheckpoint.narration_audio_url} />
+                      <div className="text-sm text-white/80">
+                        {latestAudioCheckpoint.narration_text || "Narration is available for this batch."}
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-[11px] text-white/55">
+                        <span className="rounded-[9999px] border border-white/10 bg-white/5 px-2.5 py-1">
+                          batch {latestAudioCheckpoint.batch_number}
+                        </span>
+                        <span className="rounded-[9999px] border border-white/10 bg-white/5 px-2.5 py-1">
+                          {latestAudioCheckpoint.narration_voice || "voice"}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-3 text-sm text-white/45">
+                      No audio has been generated yet.
+                    </div>
+                  )}
+                </div>
               </div>
-            )}
-          </TabsContent>
-        </Tabs>
+            </div>
+          </div>
+        </section>
       </div>
     </Layout>
   );

@@ -26,6 +26,7 @@ class StoryStatus(str, Enum):
     draft            = "draft"             # Plan generated — awaiting approval
     approved         = "approved"          # Outline approved — ready to generate
     generating       = "generating"        # Generation running
+    checkpoint_review = "checkpoint_review"  # Paused at a human review checkpoint
     ready            = "ready"             # Legacy alias for completed
     completed        = "completed"
     failed           = "failed"
@@ -87,7 +88,10 @@ class StoryResponse(BaseModel):
     num_scenes: int
     status: StoryStatus
     workflow_type: WorkflowType = WorkflowType.creator_series
+    workflow_version: str = "v1"
+    generation_version: str = "v1"
     approval_status: str = "pending_approval"
+    workflow_state: Optional[dict] = None
     episode_plan: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
@@ -135,6 +139,13 @@ class SceneResponse(BaseModel):
     approval_status: str = "pending"
     locked: bool = False
     regeneration_count: int = 0
+    generation_version: str = "v1"
+    image_model: Optional[str] = None
+    image_model_version: Optional[str] = None
+    edit_model: Optional[str] = None
+    edit_model_version: Optional[str] = None
+    source_scene_id: Optional[str] = None
+    state_snapshot: Optional[dict] = None
     created_at: datetime
 
     # Fields from generation_metadata
@@ -187,6 +198,49 @@ class GalleryItemResponse(BaseModel):
     summary: Optional[str] = None
     media_url: str
     duration: Optional[float] = None
+    created_at: datetime
+
+
+class GenerationCheckpointResponse(BaseModel):
+    id: str
+    story_id: str
+    job_id: Optional[str] = None
+    resume_job_id: Optional[str] = None
+    batch_number: int = 1
+    batch_size: int = 3
+    start_episode_number: int = 1
+    start_scene_number: int = 1
+    end_episode_number: int = 1
+    end_scene_number: int = 1
+    status: str = "pending_review"
+    generation_version: str = "v1"
+    narration_model: Optional[str] = None
+    narration_voice: Optional[str] = None
+    narration_text: Optional[str] = None
+    audio_job_id: Optional[str] = None
+    audio_status: Optional[str] = None
+    narration_audio_url: Optional[str] = None
+    narration_audio_manifest_url: Optional[str] = None
+    state_snapshot: Optional[dict] = None
+    resume_state: Optional[dict] = None
+    reviewer_notes: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    reviewed_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class HistoryEntryResponse(BaseModel):
+    id: str
+    entity_type: str
+    entity_id: str
+    revision: int
+    event_type: str
+    workflow_version: Optional[str] = None
+    generation_version: str = "v1"
+    source_job_id: Optional[str] = None
+    state_snapshot: Optional[dict] = None
+    payload: Optional[dict] = None
     created_at: datetime
 
 

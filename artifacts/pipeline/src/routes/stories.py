@@ -1,10 +1,11 @@
 import json
 from fastapi import APIRouter, HTTPException, Depends
 from db.connection import get_pool
-from models.story import StoryCreate, StoryResponse, GenerationJobResponse
+from models.story import StoryCreate, StoryResponse, GenerationJobResponse, HistoryEntryResponse
 from pipeline.story_agent import generate_episode_plan
 from job_queue import enqueue_job, WORKLOAD_STORY
 from pipeline.runtime_context import job_context
+from pipeline.history import record_story_history
 from auth import get_current_user, user_id
 
 router = APIRouter(prefix="/pipeline/stories", tags=["stories"])
@@ -21,10 +22,41 @@ def _build_story_response(row, plan_data) -> StoryResponse:
         num_scenes=row["num_scenes"],
         status=row["status"],
         workflow_type=row.get("workflow_type", "creator_series"),
+        workflow_version=row.get("workflow_version", "v1"),
+        generation_version=row.get("generation_version", "v1"),
         approval_status=row.get("approval_status", "pending_approval"),
+        workflow_state=row.get("workflow_state"),
         episode_plan=plan_data,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+    )
+
+
+def _history_row_to_response(row, entity_type: str) -> HistoryEntryResponse:
+    state_snapshot = row.get("state_snapshot")
+    payload = row.get("payload")
+    if isinstance(state_snapshot, str):
+        try:
+            state_snapshot = json.loads(state_snapshot)
+        except Exception:
+            state_snapshot = None
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            payload = None
+    return HistoryEntryResponse(
+        id=str(row["id"]),
+        entity_type=entity_type,
+        entity_id=str(row["story_id"]),
+        revision=row["revision"],
+        event_type=row["event_type"],
+        workflow_version=row.get("workflow_version"),
+        generation_version=row.get("generation_version", "v1"),
+        source_job_id=str(row["source_job_id"]) if row.get("source_job_id") else None,
+        state_snapshot=state_snapshot,
+        payload=payload,
+        created_at=row["created_at"],
     )
 
 
@@ -64,8 +96,9 @@ async def create_story(body: StoryCreate, user=Depends(get_current_user)):
     row = await pool.fetchrow(
         """INSERT INTO stories
            (owner_id, title, prompt, genre, style, num_episodes, num_scenes, status,
-            workflow_type, approval_status, episode_plan)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,'pending_approval',$9::jsonb)
+            workflow_type, workflow_version, generation_version, workflow_state,
+            approval_status, episode_plan)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,'v1','v1','{}'::jsonb,'pending_approval',$9::jsonb)
            RETURNING *""",
         owner_id,
         body.title,
@@ -78,6 +111,17 @@ async def create_story(body: StoryCreate, user=Depends(get_current_user)):
         json.dumps(plan),
     )
     story_id = str(row["id"])
+    await record_story_history(
+        pool,
+        story=row,
+        event_type="story_created",
+        payload={
+            "title": row["title"],
+            "status": row["status"],
+            "approval_status": row.get("approval_status"),
+            "workflow_type": row.get("workflow_type"),
+        },
+    )
 
     if body.bible_ids:
         for bid in body.bible_ids:
@@ -185,6 +229,15 @@ async def approve_outline(story_id: str, user=Depends(get_current_user)):
     plan_data = row["episode_plan"]
     if isinstance(plan_data, str):
         plan_data = json.loads(plan_data)
+    await record_story_history(
+        pool,
+        story=row,
+        event_type="outline_approved",
+        payload={
+            "status": row["status"],
+            "approval_status": row.get("approval_status"),
+        },
+    )
     return _build_story_response(row, plan_data)
 
 
@@ -201,7 +254,7 @@ async def generate_story(
     )
     if not story:
         raise HTTPException(status_code=404, detail="Story not found")
-    if story["status"] == "generating":
+    if story["status"] in {"generating", "checkpoint_review"}:
         raise HTTPException(status_code=409, detail="Generation already in progress")
     if story["status"] == "draft":
         raise HTTPException(
@@ -234,3 +287,21 @@ async def generate_story(
         job_type="full_episode",
         created_at=job_row["created_at"],
     )
+
+
+@router.get("/{story_id}/history", response_model=list[HistoryEntryResponse])
+async def get_story_history(story_id: str, user=Depends(get_current_user)):
+    pool = await get_pool()
+    if not await pool.fetchrow(
+        "SELECT 1 FROM stories WHERE id=$1 AND owner_id=$2",
+        story_id,
+        user_id(user),
+    ):
+        raise HTTPException(status_code=404, detail="Story not found")
+    rows = await pool.fetch(
+        """SELECT * FROM story_history
+           WHERE story_id=$1
+           ORDER BY revision ASC, created_at ASC""",
+        story_id,
+    )
+    return [_history_row_to_response(row, "story") for row in rows]
