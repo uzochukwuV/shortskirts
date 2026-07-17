@@ -36,12 +36,14 @@ fs.writeFileSync(
 fs.writeFileSync(path.join(distServerDir, 'index.js'), makeServerBundle());
 
 function makeServerBundle() {
-  return `'use strict';
+  return `import fs from 'node:fs';
+import path from 'node:path';
+import http from 'node:http';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const fs = require('node:fs');
-const path = require('node:path');
-const http = require('node:http');
-const { spawn } = require('node:child_process');
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const publicDir = path.resolve(__dirname, '..', 'public');
 const backendPort = Number(process.env.PIPELINE_PORT || '8000');
