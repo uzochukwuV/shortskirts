@@ -36,9 +36,7 @@ fs.writeFileSync(
 fs.writeFileSync(path.join(distServerDir, 'index.js'), makeServerBundle());
 
 function makeServerBundle() {
-  return `import fs from 'node:fs';
-const manifest = JSON.parse(fs.readFileSync(new URL('../.openai/hosting.json', import.meta.url), 'utf8'));
-
+  return `
 function backendBase(env) {
   return (
     env.PIPELINE_API_BASE ||
