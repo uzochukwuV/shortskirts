@@ -7,6 +7,27 @@ from auth import get_current_user, user_id
 router = APIRouter(prefix="/pipeline/episodes", tags=["episodes"])
 
 
+def _json_object(value):
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return {}
+    return value or {}
+
+
+def _scene_media_url(r, metadata: dict | None = None, snapshot: dict | None = None) -> str | None:
+    metadata = _json_object(metadata if metadata is not None else r.get("generation_metadata"))
+    snapshot = _json_object(snapshot if snapshot is not None else r.get("state_snapshot"))
+    return (
+        r.get("image_url")
+        or metadata.get("image_url")
+        or snapshot.get("image_url")
+        or snapshot.get("media_url")
+        or r.get("clip_url")
+    )
+
+
 async def _get_scenes(episode_id: str) -> list[SceneResponse]:
     pool = await get_pool()
     rows = await pool.fetch(
@@ -15,20 +36,16 @@ async def _get_scenes(episode_id: str) -> list[SceneResponse]:
     )
     result = []
     for r in rows:
-        metadata = r["generation_metadata"]
-        if isinstance(metadata, str):
-            try:
-                metadata = json.loads(metadata)
-            except Exception:
-                metadata = {}
-        metadata = metadata or {}
+        metadata = _json_object(r["generation_metadata"])
+        snapshot = _json_object(r.get("state_snapshot"))
+        image_url = _scene_media_url(r, metadata=metadata, snapshot=snapshot)
         result.append(SceneResponse(
             id=str(r["id"]),
             episode_id=str(r["episode_id"]),
             scene_number=r["scene_number"],
             prompt=r["prompt"],
             clip_url=r["clip_url"],
-            image_url=r.get("image_url"),
+            image_url=image_url,
             exit_frame_url=r["exit_frame_url"],
             duration=r["duration"],
             status=r["status"],
@@ -41,7 +58,7 @@ async def _get_scenes(episode_id: str) -> list[SceneResponse]:
             edit_model=r.get("edit_model"),
             edit_model_version=r.get("edit_model_version"),
             source_scene_id=str(r["source_scene_id"]) if r.get("source_scene_id") else None,
-            state_snapshot=r.get("state_snapshot"),
+            state_snapshot=snapshot,
             created_at=r["created_at"],
             title=metadata.get("title") or f"Scene {r['scene_number']}",
             description=metadata.get("description", ""),
@@ -49,7 +66,7 @@ async def _get_scenes(episode_id: str) -> list[SceneResponse]:
             mood=metadata.get("mood", ""),
             location=metadata.get("location", ""),
             narration=metadata.get("narration", ""),
-            media_kind=metadata.get("media_kind") or ("image" if r.get("image_url") else "video"),
+            media_kind=metadata.get("media_kind") or ("image" if image_url else "video"),
         ))
     return result
 

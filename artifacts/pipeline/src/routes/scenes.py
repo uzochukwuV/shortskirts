@@ -9,6 +9,7 @@ Key endpoints:
   GET  /pipeline/scenes/{id}               — get scene detail
 """
 import json
+from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException, Depends
 from db.connection import get_pool
 from models.story import SceneResponse, GenerationJobResponse, HistoryEntryResponse
@@ -17,6 +18,12 @@ from pipeline.history import record_scene_history
 from auth import get_current_user, user_id
 
 router = APIRouter(prefix="/pipeline/scenes", tags=["scenes"])
+
+
+class SceneReferencesUpdate(BaseModel):
+    reference_image_urls: list[str] = Field(default_factory=list)
+
+
 async def _scene_belongs_to_owner(pool, scene_id: str, owner_id: str) -> bool:
     return bool(await pool.fetchval(
         """SELECT 1 FROM scenes sc
@@ -30,14 +37,31 @@ async def _scene_belongs_to_owner(pool, scene_id: str, owner_id: str) -> bool:
 
 # ─── Helper ───────────────────────────────────────────────────────────────────
 
+def _json_object(value):
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return {}
+    return value or {}
+
+
+def _scene_media_url(r, metadata: dict | None = None, snapshot: dict | None = None) -> str | None:
+    metadata = _json_object(metadata if metadata is not None else r.get("generation_metadata"))
+    snapshot = _json_object(snapshot if snapshot is not None else r.get("state_snapshot"))
+    return (
+        r.get("image_url")
+        or metadata.get("image_url")
+        or snapshot.get("image_url")
+        or snapshot.get("media_url")
+        or r.get("clip_url")
+    )
+
+
 def _row_to_scene(r, metadata: dict | None = None) -> SceneResponse:
-    if metadata is None:
-        metadata = r.get("generation_metadata") or {}
-        if isinstance(metadata, str):
-            try:
-                metadata = json.loads(metadata)
-            except Exception:
-                metadata = {}
+    metadata = _json_object(metadata if metadata is not None else r.get("generation_metadata"))
+    snapshot = _json_object(r.get("state_snapshot"))
+    image_url = _scene_media_url(r, metadata=metadata, snapshot=snapshot)
 
     return SceneResponse(
         id=str(r["id"]),
@@ -45,7 +69,7 @@ def _row_to_scene(r, metadata: dict | None = None) -> SceneResponse:
         scene_number=r["scene_number"],
         prompt=r["prompt"],
         clip_url=r["clip_url"],
-        image_url=r.get("image_url"),
+        image_url=image_url,
         exit_frame_url=r["exit_frame_url"],
         duration=r["duration"],
         status=r["status"],
@@ -66,7 +90,7 @@ def _row_to_scene(r, metadata: dict | None = None) -> SceneResponse:
         mood=metadata.get("mood", ""),
         location=metadata.get("location", ""),
         narration=metadata.get("narration", ""),
-        media_kind=metadata.get("media_kind") or ("image" if r.get("image_url") else "video"),
+        media_kind=metadata.get("media_kind") or ("image" if image_url else "video"),
     )
 
 
@@ -205,6 +229,60 @@ async def lock_scene(scene_id: str, user=Depends(get_current_user)):
         payload={"locked": True},
     )
     return _row_to_scene(row)
+
+
+@router.put("/{scene_id}/references", response_model=SceneResponse)
+async def update_scene_references(
+    scene_id: str,
+    body: SceneReferencesUpdate,
+    user=Depends(get_current_user),
+):
+    pool = await get_pool()
+    if not await _scene_belongs_to_owner(pool, scene_id, user_id(user)):
+        raise HTTPException(status_code=404, detail="Scene not found")
+
+    row = await pool.fetchrow("SELECT * FROM scenes WHERE id=$1", scene_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Scene not found")
+
+    snapshot = row.get("state_snapshot") or {}
+    if isinstance(snapshot, str):
+        try:
+            snapshot = json.loads(snapshot)
+        except Exception:
+            snapshot = {}
+    snapshot = dict(snapshot or {})
+    snapshot["reference_image_urls"] = [u for u in body.reference_image_urls if u]
+
+    updated = await pool.fetchrow(
+        """UPDATE scenes
+           SET state_snapshot=$2::jsonb, updated_at=now()
+           WHERE id=$1
+           RETURNING *""",
+        scene_id,
+        json.dumps(snapshot),
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Scene not found")
+
+    story = await pool.fetchrow(
+        """SELECT s.* FROM scenes sc
+           JOIN episodes e ON e.id = sc.episode_id
+           JOIN stories s ON s.id = e.story_id
+           WHERE sc.id=$1""",
+        scene_id,
+    )
+    if story:
+        await record_scene_history(
+            pool,
+            story=story,
+            scene=updated,
+            event_type="scene_references_updated",
+            payload={
+                "reference_image_count": len(snapshot["reference_image_urls"]),
+            },
+        )
+    return _row_to_scene(updated)
 
 
 # ─── Regenerate scene ────────────────────────────────────────────────────────

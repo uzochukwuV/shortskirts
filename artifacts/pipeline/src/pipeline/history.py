@@ -11,7 +11,7 @@ def _as_dict(row: Any) -> dict[str, Any]:
 
 
 def _json_value(value: Any) -> str:
-    return json.dumps(value if value is not None else {})
+    return json.dumps(value if value is not None else {}, default=str)
 
 
 async def _next_revision(pool, table: str, entity_column: str, entity_id: str) -> int:

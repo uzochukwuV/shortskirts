@@ -31,6 +31,22 @@ def _json_loads(value):
     return value
 
 
+def _workflow_refs(story: dict, key: str) -> list[str]:
+    workflow_state = story.get("workflow_state") or {}
+    if isinstance(workflow_state, str):
+        try:
+            workflow_state = json.loads(workflow_state)
+        except Exception:
+            workflow_state = {}
+    refs = workflow_state.get(key) or []
+    if isinstance(refs, str):
+        try:
+            refs = json.loads(refs)
+        except Exception:
+            refs = []
+    return [u for u in refs if u]
+
+
 def _flatten_scene_sequence(plan: dict) -> list[tuple[dict, dict]]:
     sequence: list[tuple[dict, dict]] = []
     for ep_plan in plan.get("episodes", []):
@@ -283,6 +299,7 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
         batch_start_episode_number: Optional[int] = None
         batch_start_scene_number: Optional[int] = None
         checkpoint_scenes: list[dict] = []
+        story_scene_refs = _workflow_refs(story, "scene_reference_urls")
 
         episode_cache: dict[int, str] = {}
 
@@ -415,6 +432,8 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
                     if not refs:
                         missing_ref_characters.add(char_name)
             char_refs = char_refs[:4]
+            if story_scene_refs:
+                char_refs = (char_refs + story_scene_refs)[:8]
             if chars_in_scene and not char_refs:
                 print(
                     f"[orchestrator] Warning: Scene {scene_num} has characters "
@@ -457,6 +476,9 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
                     "narration": result.get("narration", scene_plan.get("narration", "")),
                     "duration_seconds": result.get("duration", scene_plan.get("duration_seconds")),
                     "media_kind": result.get("media_kind", "video"),
+                    "image_url": result.get("image_url"),
+                    "media_url": result.get("image_url") or result.get("clip_url"),
+                    "exit_frame_url": result.get("exit_frame_url"),
                     "narration_model": narration_model if is_narrated_image_story else None,
                 })
 
@@ -480,6 +502,8 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
                                 "episode_number": ep_num,
                                 "scene_number": scene_num,
                                 "refs_used": result.get("refs_used", 0),
+                                "image_url": result.get("image_url"),
+                                "media_url": result.get("image_url") or result.get("clip_url"),
                             },
                         )),
                         scene_id,
@@ -502,6 +526,8 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
                             extra={
                                 "episode_number": ep_num,
                                 "scene_number": scene_num,
+                                "clip_url": result.get("clip_url"),
+                                "media_url": result.get("clip_url"),
                             },
                         )),
                         scene_id,

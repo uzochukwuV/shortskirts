@@ -33,15 +33,29 @@ async def _fetch_gallery_items(pool, owner_id: str | None = None, public: bool =
                 sc.scene_number,
                 COALESCE(sc.generation_metadata->>'title', 'Scene ' || sc.scene_number::text) AS title,
                 COALESCE(sc.generation_metadata->>'description', sc.prompt) AS summary,
-                COALESCE(sc.image_url, sc.clip_url) AS media_url,
-                COALESCE(sc.generation_metadata->>'media_kind', CASE WHEN sc.image_url IS NOT NULL THEN 'image' ELSE 'video' END) AS media_kind,
+                COALESCE(
+                    sc.image_url,
+                    sc.generation_metadata->>'image_url',
+                    sc.state_snapshot->>'media_url',
+                    sc.clip_url
+                ) AS media_url,
+                COALESCE(
+                    sc.generation_metadata->>'media_kind',
+                    CASE
+                        WHEN sc.image_url IS NOT NULL
+                          OR sc.generation_metadata->>'image_url' IS NOT NULL
+                          OR sc.state_snapshot->>'media_url' IS NOT NULL
+                        THEN 'image'
+                        ELSE 'video'
+                    END
+                ) AS media_kind,
                 sc.duration,
                 COALESCE(sc.updated_at, sc.created_at) AS sort_at,
                 sc.created_at
             FROM scenes sc
             JOIN episodes e ON e.id = sc.episode_id
             JOIN stories s ON s.id = e.story_id
-            WHERE COALESCE(sc.image_url, sc.clip_url) IS NOT NULL {owner_clause} {scene_status_clause}
+            WHERE COALESCE(sc.image_url, sc.generation_metadata->>'image_url', sc.state_snapshot->>'media_url', sc.clip_url) IS NOT NULL {owner_clause} {scene_status_clause}
         ),
         episode_items AS (
             SELECT
@@ -54,7 +68,7 @@ async def _fetch_gallery_items(pool, owner_id: str | None = None, public: bool =
                 NULL::uuid AS scene_id,
                 NULL::int AS scene_number,
                 e.title AS title,
-                e.summary AS summary,
+                NULL::text AS summary,
                 e.assembled_video_url AS media_url,
                 'video'::text AS media_kind,
                 NULL::float AS duration,

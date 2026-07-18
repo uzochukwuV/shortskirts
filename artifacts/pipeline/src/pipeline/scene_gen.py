@@ -103,6 +103,11 @@ async def _try_dashscope_video(prompt: str, image_url: Optional[str] = None) -> 
                 "video:dashscope:submit",
                 lambda: _post_json(http, endpoint, headers, payload),
                 extra={"model": payload["model"]},
+                extra_builder=lambda result: {
+                    "model": payload["model"],
+                    "task_id": result.get("output", {}).get("task_id"),
+                    "provider_status": result.get("output", {}).get("task_status"),
+                },
             )
 
         task_id = data["output"]["task_id"]
@@ -179,6 +184,10 @@ async def _try_aiml_video(prompt: str, image_url: Optional[str] = None) -> str:
             "video:aiml:submit",
             lambda: _post_json(http, f"{AIML_BASE_URL}/v2/video/generations", headers, payload),
             extra={"model": payload["model"]},
+            extra_builder=lambda result: {
+                "model": payload["model"],
+                "task_id": result.get("id") or result.get("generation_id") or result.get("task_id"),
+            },
         )
 
     task_id = data.get("id") or data.get("generation_id") or data.get("task_id")

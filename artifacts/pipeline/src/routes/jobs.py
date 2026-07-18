@@ -66,6 +66,36 @@ async def _job_belongs_to_owner(pool, row, owner_id: str) -> bool:
     return bool(found)
 
 
+def _metric_row(row):
+    extra = row.get("extra")
+    if isinstance(extra, str):
+        try:
+            extra = json.loads(extra)
+        except Exception:
+            extra = {}
+    extra = extra or {}
+    return {
+        "id": str(row["id"]),
+        "metric_kind": row["metric_kind"],
+        "status": row["status"],
+        "duration_ms": row["duration_ms"],
+        "provider_latency_ms": row["provider_latency_ms"],
+        "estimated_cost_usd": float(row["estimated_cost_usd"]) if row.get("estimated_cost_usd") is not None else None,
+        "retries": row["retries"],
+        "step_name": row["step_name"],
+        "provider": row["provider"],
+        "provider_task_id": row.get("provider_task_id") or extra.get("task_id") or extra.get("provider_task_id"),
+        "provider_request_id": row.get("provider_request_id") or extra.get("request_id") or extra.get("provider_request_id"),
+        "error": row["error"],
+        "job_id": str(row["job_id"]) if row.get("job_id") else None,
+        "entity_type": row["entity_type"],
+        "entity_id": str(row["entity_id"]) if row.get("entity_id") else None,
+        "workload": row["workload"],
+        "extra": extra,
+        "created_at": row["created_at"],
+    }
+
+
 @router.get("/{job_id}", response_model=GenerationJobResponse)
 async def get_job(job_id: str, user=Depends(get_current_user)):
     pool = await get_pool()
@@ -91,3 +121,20 @@ async def list_entity_jobs(entity_type: str, entity_id: str, user=Depends(get_cu
         if await _job_belongs_to_owner(pool, row, owner_id):
             result.append(_job_response(row))
     return result
+
+
+@router.get("/{job_id}/metrics")
+async def list_job_metrics(job_id: str, user=Depends(get_current_user)):
+    pool = await get_pool()
+    job = await pool.fetchrow("SELECT * FROM generation_jobs WHERE id=$1", job_id)
+    if not job or not await _job_belongs_to_owner(pool, job, user_id(user)):
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    rows = await pool.fetch(
+        """SELECT *
+           FROM pipeline_metrics
+           WHERE job_id=$1
+           ORDER BY created_at ASC""",
+        job_id,
+    )
+    return [_metric_row(row) for row in rows]

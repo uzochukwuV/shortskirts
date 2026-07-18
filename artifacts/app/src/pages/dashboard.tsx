@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import {
@@ -11,6 +11,8 @@ import {
   Loader2,
   Plus,
   Sparkles,
+  Trash2,
+  Upload,
   Video,
 } from "lucide-react";
 import { Layout } from "@/components/layout";
@@ -109,6 +111,74 @@ function StoryCard({ story }: { story: Story }) {
   );
 }
 
+type RefAsset = {
+  url: string;
+  name: string;
+};
+
+function ReferenceUploadSection({
+  label,
+  description,
+  items,
+  onUpload,
+  onRemove,
+  disabled,
+}: {
+  label: string;
+  description: string;
+  items: RefAsset[];
+  onUpload: (files: FileList | null) => void;
+  onRemove: (url: string) => void;
+  disabled?: boolean;
+}) {
+  const inputId = `${label.toLowerCase().replace(/\s+/g, "-")}-upload`;
+  return (
+    <div className="space-y-3 rounded-[16px] border border-border bg-muted/30 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium text-foreground">{label}</div>
+          <div className="mt-1 text-xs leading-5 text-muted-foreground">{description}</div>
+        </div>
+        <label htmlFor={inputId}>
+          <Button variant="outline" size="sm" className="cursor-pointer" asChild>
+            <span>
+              <Upload className="h-4 w-4" />
+              Upload
+            </span>
+          </Button>
+        </label>
+        <input
+          id={inputId}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          disabled={disabled}
+          onChange={(e) => onUpload(e.target.files)}
+        />
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        {items.length > 0 ? items.map((item) => (
+          <div key={item.url} className="group relative overflow-hidden rounded-[12px] border border-border bg-white">
+            <img src={item.url} alt={item.name} className="h-24 w-full object-cover" />
+            <button
+              type="button"
+              onClick={() => onRemove(item.url)}
+              className="absolute right-1 top-1 rounded-full border border-white/20 bg-black/60 p-1 text-white opacity-0 transition-opacity group-hover:opacity-100"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )) : (
+          <div className="col-span-3 rounded-[12px] border border-dashed border-border bg-white px-3 py-4 text-xs text-muted-foreground">
+            No images uploaded yet.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CreateProductionDialog({ onCreated }: { onCreated: (id: string) => void }) {
   const [open, setOpen] = useState(false);
   const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowType>("creator_series");
@@ -119,20 +189,43 @@ function CreateProductionDialog({ onCreated }: { onCreated: (id: string) => void
   const [style, setStyle] = useState(preset.style);
   const [episodes, setEpisodes] = useState(preset.episodes);
   const [scenes, setScenes] = useState(preset.scenes);
+  const [styleRefs, setStyleRefs] = useState<RefAsset[]>([]);
+  const [characterRefs, setCharacterRefs] = useState<RefAsset[]>([]);
+  const [sceneRefs, setSceneRefs] = useState<RefAsset[]>([]);
+  const [uploading, setUploading] = useState(false);
   const qc = useQueryClient();
   const [, setLocation] = useLocation();
 
+  const uploadFiles = async (files: FileList | null, setter: Dispatch<SetStateAction<RefAsset[]>>) => {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    try {
+      const uploads = await Promise.all(
+        Array.from(files).map(async (file) => {
+          const uploaded = await api.uploadImage(file);
+          return { url: uploaded.url, name: file.name };
+        }),
+      );
+      setter((prev) => [...prev, ...uploads]);
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const create = useMutation({
     mutationFn: () =>
-      api.createStory({
-        title,
-        prompt,
-        genre,
-        style,
-        num_episodes: episodes,
-        num_scenes: scenes,
-        workflow_type: selectedWorkflow,
-      }),
+        api.createStory({
+          title,
+          prompt,
+          genre,
+          style,
+          num_episodes: episodes,
+          num_scenes: scenes,
+          workflow_type: selectedWorkflow,
+          style_reference_urls: styleRefs.map((item) => item.url),
+          character_reference_urls: characterRefs.map((item) => item.url),
+          scene_reference_urls: sceneRefs.map((item) => item.url),
+        }),
     onSuccess: (story) => {
       qc.invalidateQueries({ queryKey: ["stories"] });
       setOpen(false);
@@ -143,6 +236,9 @@ function CreateProductionDialog({ onCreated }: { onCreated: (id: string) => void
       setStyle(WORKFLOWS[0].style);
       setEpisodes(WORKFLOWS[0].episodes);
       setScenes(WORKFLOWS[0].scenes);
+      setStyleRefs([]);
+      setCharacterRefs([]);
+      setSceneRefs([]);
       onCreated(story.id);
       setLocation(`/stories/${story.id}`);
     },
@@ -217,14 +313,41 @@ function CreateProductionDialog({ onCreated }: { onCreated: (id: string) => void
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <Label className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Brief</Label>
-                <Textarea
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  placeholder="Describe the story, campaign, or content you want to build."
-                  className="min-h-[180px]"
-                />
+                <div className="space-y-2">
+                  <Label className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Brief</Label>
+                  <Textarea
+                    value={prompt}
+                    onChange={(e) => setPrompt(e.target.value)}
+                    placeholder="Describe the story, campaign, or content you want to build."
+                    className="min-h-[180px]"
+                  />
+                </div>
+
+              <div className="grid gap-4">
+              <ReferenceUploadSection
+                label="Style references"
+                description="Upload mood boards, lighting refs, color language, or composition examples."
+                items={styleRefs}
+                disabled={uploading}
+                onUpload={(files) => uploadFiles(files, setStyleRefs)}
+                onRemove={(url) => setStyleRefs((prev) => prev.filter((item) => item.url !== url))}
+              />
+              <ReferenceUploadSection
+                label="Character references"
+                description="Upload main character refs before generation starts so consistency has a base."
+                items={characterRefs}
+                disabled={uploading}
+                onUpload={(files) => uploadFiles(files, setCharacterRefs)}
+                onRemove={(url) => setCharacterRefs((prev) => prev.filter((item) => item.url !== url))}
+              />
+              <ReferenceUploadSection
+                label="Scene references"
+                description="Upload scene-specific refs you want the generator to carry into production."
+                items={sceneRefs}
+                disabled={uploading}
+                onUpload={(files) => uploadFiles(files, setSceneRefs)}
+                onRemove={(url) => setSceneRefs((prev) => prev.filter((item) => item.url !== url))}
+              />
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
@@ -262,7 +385,7 @@ function CreateProductionDialog({ onCreated }: { onCreated: (id: string) => void
                 </div>
                 <Button
                   variant="lime"
-                  disabled={!title.trim() || !prompt.trim() || create.isPending}
+                  disabled={!title.trim() || !prompt.trim() || create.isPending || uploading}
                   onClick={() => create.mutate()}
                 >
                   {create.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />}

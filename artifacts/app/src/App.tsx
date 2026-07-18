@@ -6,6 +6,7 @@ import NotFound from "@/pages/not-found";
 import Home from "@/pages/home";
 import Dashboard from "@/pages/dashboard";
 import StoryDetail from "@/pages/story-detail";
+import Admin from "@/pages/admin";
 import Pricing from "@/pages/pricing";
 import Login from "@/pages/login";
 import { AuthProvider, useAuth } from "@/lib/auth";
@@ -26,6 +27,7 @@ function Router() {
       <Route path="/login" component={Login} />
       <Route path="/dashboard">{() => <ProtectedRoute component={Dashboard} />}</Route>
       <Route path="/stories/:id">{() => <ProtectedRoute component={StoryDetail} />}</Route>
+      <Route path="/admin" component={Admin} />
       <Route path="/pricing" component={Pricing} />
       <Route component={NotFound} />
     </Switch>

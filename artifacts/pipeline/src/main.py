@@ -11,7 +11,9 @@ from routes.scenes     import router as scenes_router
 from routes.gallery    import router as gallery_router
 from routes.checkpoints import router as checkpoints_router
 from routes.bibles     import router as bibles_router
+from routes.uploads    import router as uploads_router
 from routes.jobs       import router as jobs_router
+from routes.admin      import router as admin_router
 from auth              import router as auth_router
 
 
@@ -45,7 +47,9 @@ app.include_router(scenes_router)
 app.include_router(gallery_router)
 app.include_router(checkpoints_router)
 app.include_router(bibles_router)
+app.include_router(uploads_router)
 app.include_router(jobs_router)
+app.include_router(admin_router)
 
 
 @app.get("/pipeline/health")
@@ -106,6 +110,9 @@ async def root():
             ],
             "gallery": [
                 "GET    /pipeline/gallery",
+            ],
+            "uploads": [
+                "POST   /pipeline/uploads/image",
             ],
             "jobs": [
                 "GET    /pipeline/jobs/{id}",

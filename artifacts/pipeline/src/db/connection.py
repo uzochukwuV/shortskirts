@@ -61,3 +61,20 @@ async def init_db():
                     pass
                 else:
                     print(f"[db] Warning on stmt: {e}\nStatement: {stmt[:120]}")
+
+        # Backfill media URLs for older narrated-image scenes where the asset was
+        # written into JSON metadata before the dedicated column existed.
+        repair_statements = [
+            """
+            UPDATE scenes
+            SET image_url = COALESCE(image_url, generation_metadata->>'image_url', state_snapshot->>'media_url'),
+                updated_at = COALESCE(updated_at, now())
+            WHERE image_url IS NULL
+              AND (generation_metadata->>'image_url' IS NOT NULL OR state_snapshot->>'media_url' IS NOT NULL)
+            """,
+        ]
+        for stmt in repair_statements:
+            try:
+                await conn.execute(stmt)
+            except Exception as e:
+                print(f"[db] Warning on repair stmt: {e}\nStatement: {stmt[:120]}")

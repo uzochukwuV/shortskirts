@@ -1,86 +1,101 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useRoute } from "wouter";
 import {
   ArrowLeft,
+  Bot,
   CheckCircle2,
+  ChevronRight,
+  Clapperboard,
   Clock3,
+  Eye,
+  FileText,
+  Film,
+  History,
+  ImagePlus,
+  Layers3,
+  LayoutPanelLeft,
   Loader2,
   Lock,
   MessageSquareText,
+  Mic2,
+  MoreHorizontal,
+  Play,
   RefreshCw,
+  Search,
   Send,
+  Settings2,
   ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
   ThumbsDown,
   ThumbsUp,
+  Trash2,
+  Upload,
   Video,
   WandSparkles,
 } from "lucide-react";
-import { Layout } from "@/components/layout";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { api, Character, HistoryEntry, Scene, Story } from "@/lib/api";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Progress } from "@/components/ui/progress";
+import { Slider } from "@/components/ui/slider";
+import { api, Character, Episode, GenerationJob, HistoryEntry, Scene, Story } from "@/lib/api";
+import { ConsoleStage } from "@/components/story-console/console-stage";
+import { ConsoleInspector } from "@/components/story-console/console-inspector";
+import { ConsoleBottomTray } from "@/components/story-console/console-bottom-tray";
 
-type ChatMessage = {
-  role: "assistant" | "user";
-  text: string;
-};
+type ChatMessage = { role: "assistant" | "user"; text: string };
+type RefAsset = { url: string; name: string };
+type WorkspaceTab = "design" | "outline" | "script" | "history";
+type InspectorMode = "scene" | "refs" | "cast" | "history";
 
-function storyTone(status: Story["status"]) {
-  switch (status) {
-    case "draft":
-      return "border-amber-200 bg-amber-50 text-amber-700";
-    case "approved":
-      return "border-border bg-muted text-foreground";
-    case "generating":
-      return "border-[color:#96ff1a] bg-[color:#f5ffd8] text-[color:#083300]";
-    case "checkpoint_review":
-      return "border-[color:#96ff1a] bg-white text-[color:#083300]";
-    case "completed":
-      return "border-emerald-200 bg-emerald-50 text-emerald-700";
-    default:
-      return "border-border bg-white text-foreground";
-  }
-}
-
-function sceneTone(status: string, approval: string) {
-  if (approval === "approved") return "border-emerald-200 bg-emerald-50";
-  if (approval === "rejected") return "border-rose-200 bg-rose-50";
-  if (status === "running") return "border-[color:#96ff1a] bg-[color:#f5ffd8]";
-  return "border-border bg-white";
+function statusTone(status?: string) {
+  if (status === "completed" || status === "ready" || status === "approved") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "draft" || status === "pending_approval") return "border-amber-200 bg-amber-50 text-amber-700";
+  if (status === "generating" || status === "checkpoint_review") return "border-[#083300] bg-[#96ff1a] text-[#083300]";
+  if (status === "failed" || status === "rejected") return "border-red-200 bg-red-50 text-red-700";
+  return "border-[#e6e6e7] bg-white text-[#71737a]";
 }
 
 function formatShortDate(value?: string | null) {
   if (!value) return "";
-  return new Date(value).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
+  return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function SceneTile({
-  scene,
-  active,
-  onClick,
-}: {
-  scene: Scene;
-  active: boolean;
-  onClick: () => void;
-}) {
-  const media = scene.image_url || scene.clip_url || scene.video_url;
-  const kind = scene.media_kind || (scene.image_url ? "image" : "video");
+function makeStoryText(story: Story) {
+  const plan = story.episode_plan;
+  if (!plan) return story.prompt;
+  const lines: string[] = [];
+  if (plan.synopsis) lines.push(plan.synopsis);
+  for (const episode of plan.episodes || []) {
+    lines.push("");
+    lines.push(`Episode ${episode.episode_number}: ${episode.title}`);
+    if (episode.summary) lines.push(episode.summary);
+    for (const scene of episode.scenes || []) {
+      lines.push("");
+      lines.push(`Scene ${scene.scene_number}: ${scene.title}`);
+      lines.push(scene.description || scene.action || "");
+      if (scene.narration) lines.push(`Narration: ${scene.narration}`);
+    }
+  }
+  return lines.filter(Boolean).join("\n");
+}
 
+function SceneTile({ scene, active, onClick }: { scene: Scene; active: boolean; onClick: () => void }) {
+  const media = scene.image_url || scene.media_url || scene.clip_url || scene.video_url;
+  const kind = scene.media_kind || (scene.image_url || scene.media_url ? "image" : "video");
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`group min-w-[180px] max-w-[180px] shrink-0 snap-start overflow-hidden rounded-[16px] border text-left transition-all ${
-        active ? "border-[color:#083300] shadow-[0_0_0_1px_rgba(8,51,0,0.14)]" : "border-border hover:border-[color:#96ff1a]"
+      className={`group w-[156px] shrink-0 overflow-hidden rounded-[12px] border bg-white text-left transition ${
+        active ? "border-[#0c0a09] shadow-[0_0_0_2px_rgba(150,255,26,0.8)]" : "border-[#e6e6e7] hover:border-[#323232]"
       }`}
     >
-      <div className="relative aspect-[16/10] bg-[color:#121212]">
+      <div className="relative aspect-video bg-[#121212]">
         {media ? (
           kind === "image" ? (
             <img src={media} alt={scene.title || `Scene ${scene.scene_number}`} className="h-full w-full object-cover" />
@@ -88,34 +103,269 @@ function SceneTile({
             <video src={media} className="h-full w-full object-cover" muted playsInline preload="metadata" />
           )
         ) : (
-          <div className="flex h-full items-center justify-center text-white/30">
-            <Video className="h-8 w-8" />
+          <div className="flex h-full items-center justify-center text-white/35">
+            <Video className="h-6 w-6" />
           </div>
         )}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
-        <div className="absolute left-2 top-2 rounded-[9999px] border border-white/10 bg-black/50 px-2 py-0.5 text-[10px] text-white">
-          S{scene.scene_number}
-        </div>
-        <div className="absolute bottom-2 left-2 right-2">
-          <div className="line-clamp-2 text-[12px] font-medium text-white">{scene.title || `Scene ${scene.scene_number}`}</div>
-        </div>
+        <div className="absolute left-2 top-2 rounded-[6px] bg-black/70 px-1.5 py-0.5 text-[10px] font-bold text-white">S{scene.scene_number}</div>
+      </div>
+      <div className="p-2">
+        <div className="truncate text-[12px] font-semibold text-[#0c0a09]">{scene.title || `Scene ${scene.scene_number}`}</div>
+        <div className="mt-1 truncate text-[11px] text-[#71737a]">{scene.status}</div>
       </div>
     </button>
   );
 }
 
-function HistoryLine({ entry }: { entry: HistoryEntry }) {
+function SidebarButton({ icon: Icon, label, active, onClick }: { icon: any; label: string; active?: boolean; onClick: () => void }) {
   return (
-    <div className="flex items-start gap-3 rounded-[14px] border border-border bg-white px-3 py-2">
-      <div className="mt-1 h-2 w-2 rounded-full bg-[color:#96ff1a]" />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-3">
-          <div className="truncate text-xs font-medium text-foreground">{entry.event_type}</div>
-          <div className="text-[10px] text-muted-foreground">v{entry.revision}</div>
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex w-full flex-col items-center gap-1 rounded-[10px] px-1 py-2 text-[10px] font-semibold transition ${
+        active ? "bg-[#e6ffc8] text-[#083300]" : "text-[#71737a] hover:bg-[#f2f1f0] hover:text-[#0c0a09]"
+      }`}
+    >
+      <Icon className="h-5 w-5" />
+      <span>{label}</span>
+    </button>
+  );
+}
+
+function PanelSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="border-b border-[#e6e6e7] p-4">
+      <div className="mb-3 text-[11px] font-bold uppercase text-[#71737a]">{title}</div>
+      {children}
+    </section>
+  );
+}
+
+function EmptyCanvas({ story }: { story: Story }) {
+  return (
+    <div className="flex h-full items-center justify-center text-center">
+      <div className="max-w-sm">
+        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[#96ff1a] text-[#083300]">
+          <Play className="h-7 w-7" />
         </div>
-        <div className="mt-1 text-[11px] text-muted-foreground">
-          {formatShortDate(entry.created_at)}
+        <h2 className="mt-5 text-2xl font-extrabold text-[#0c0a09]">No rendered scene yet</h2>
+        <p className="mt-2 text-sm leading-6 text-[#71737a]">
+          {story.status === "draft" ? "Review the outline and approve it to begin video generation." : "Generated scene media will appear on the canvas."}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function OutlineView({ story }: { story: Story }) {
+  const plan = story.episode_plan;
+  if (!plan) return <EmptyCanvas story={story} />;
+  return (
+    <div className="h-full overflow-y-auto p-6">
+      <div className="mx-auto max-w-[980px] space-y-5">
+        <section className="rounded-[16px] border border-[#e6e6e7] bg-white p-5">
+          <div className="text-[11px] font-bold uppercase text-[#71737a]">Generated storyline</div>
+          <h1 className="mt-2 text-3xl font-extrabold text-[#0c0a09]">{story.title}</h1>
+          <p className="mt-3 text-sm leading-7 text-[#323232]">{plan.synopsis || story.prompt}</p>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <Info label="Setting" value={plan.setting || "-"} />
+            <Info label="Themes" value={(plan.themes || []).join(", ") || "-"} />
+          </div>
+        </section>
+
+        {(plan.episodes || []).map((episode: any) => (
+          <section key={episode.episode_number} className="overflow-hidden rounded-[16px] border border-[#e6e6e7] bg-white">
+            <div className="border-b border-[#e6e6e7] p-5">
+              <div className="text-[11px] font-bold uppercase text-[#71737a]">Episode {episode.episode_number}</div>
+              <h2 className="mt-1 text-xl font-extrabold text-[#0c0a09]">{episode.title}</h2>
+              <p className="mt-2 text-sm leading-6 text-[#71737a]">{episode.summary}</p>
+            </div>
+            <div className="divide-y divide-[#e6e6e7]">
+              {(episode.scenes || []).map((scene: any) => (
+                <div key={`${episode.episode_number}-${scene.scene_number}`} className="grid gap-4 p-5 md:grid-cols-[120px_1fr]">
+                  <div>
+                    <div className="text-[11px] font-bold uppercase text-[#083300]">Scene {scene.scene_number}</div>
+                    <div className="mt-1 text-xs text-[#71737a]">{scene.duration_seconds || 6}s</div>
+                  </div>
+                  <div>
+                    <div className="text-base font-extrabold text-[#0c0a09]">{scene.title}</div>
+                    <p className="mt-1 text-sm leading-6 text-[#323232]">{scene.description}</p>
+                    <div className="mt-3 grid gap-2 md:grid-cols-2">
+                      <Info label="Location" value={scene.location || "-"} compact />
+                      <Info label="Mood" value={scene.mood || "-"} compact />
+                      <Info label="Cast" value={(scene.characters_present || []).join(", ") || "-"} compact />
+                      <Info label="Narration" value={scene.narration || "-"} compact />
+                    </div>
+                    <div className="mt-3 rounded-[10px] bg-[#f2f1f0] p-3 text-xs leading-5 text-[#4d4d51]">{scene.visual_prompt || scene.action || scene.description}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ScriptView({ story }: { story: Story }) {
+  return (
+    <div className="h-full overflow-y-auto p-6">
+      <div className="mx-auto max-w-[860px] rounded-[16px] border border-[#e6e6e7] bg-white p-6">
+        <div className="text-[11px] font-bold uppercase text-[#71737a]">Story text</div>
+        <h1 className="mt-2 text-3xl font-extrabold text-[#0c0a09]">{story.title}</h1>
+        <pre className="mt-5 whitespace-pre-wrap font-sans text-[15px] leading-8 text-[#323232]">{makeStoryText(story)}</pre>
+      </div>
+    </div>
+  );
+}
+
+function HistoryView({ entries, selected, onSelect }: { entries: HistoryEntry[]; selected?: HistoryEntry | null; onSelect: (entry: HistoryEntry) => void }) {
+  return (
+    <div className="grid h-full grid-cols-[320px_1fr]">
+      <div className="overflow-y-auto border-r border-[#e6e6e7] bg-white p-3">
+        {entries.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            onClick={() => onSelect(entry)}
+            className={`mb-2 w-full rounded-[12px] border p-3 text-left transition ${
+              selected?.id === entry.id ? "border-[#0c0a09] bg-[#e6ffc8]" : "border-[#e6e6e7] bg-white hover:bg-[#f2f1f0]"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate text-sm font-extrabold text-[#0c0a09]">{entry.event_type}</span>
+              <span className="text-[11px] text-[#71737a]">v{entry.revision}</span>
+            </div>
+            <div className="mt-1 text-xs text-[#71737a]">{formatShortDate(entry.created_at)}</div>
+          </button>
+        ))}
+        {!entries.length && <div className="rounded-[12px] border border-dashed border-[#e6e6e7] p-4 text-sm text-[#71737a]">No history yet.</div>}
+      </div>
+      <div className="overflow-y-auto p-6">
+        {selected ? (
+          <div className="space-y-4">
+            <section className="rounded-[16px] border border-[#e6e6e7] bg-white p-5">
+              <div className="text-[11px] font-bold uppercase text-[#71737a]">Selected event</div>
+              <h2 className="mt-1 text-2xl font-extrabold text-[#0c0a09]">{selected.event_type}</h2>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Badge className="border-[#e6e6e7] bg-[#f2f1f0] text-[#323232]">revision {selected.revision}</Badge>
+                <Badge className="border-[#e6e6e7] bg-[#f2f1f0] text-[#323232]">{selected.generation_version}</Badge>
+                <Badge className="border-[#e6e6e7] bg-[#f2f1f0] text-[#323232]">{new Date(selected.created_at).toLocaleString()}</Badge>
+              </div>
+            </section>
+            <JsonBlock title="Payload" value={selected.payload || {}} />
+            <JsonBlock title="State snapshot" value={selected.state_snapshot || {}} />
+          </div>
+        ) : (
+          <div className="flex h-full items-center justify-center text-[#71737a]">Select a history item.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Info({ label, value, compact }: { label: string; value: string; compact?: boolean }) {
+  return (
+    <div className={`rounded-[10px] border border-[#e6e6e7] bg-[#f8f8f8] ${compact ? "p-2" : "p-3"}`}>
+      <div className="text-[10px] font-bold uppercase text-[#71737a]">{label}</div>
+      <div className={`${compact ? "mt-1 text-xs" : "mt-2 text-sm"} leading-5 text-[#323232]`}>{value}</div>
+    </div>
+  );
+}
+
+function MetricPill({ label, value, tone = "light" }: { label: string; value: string; tone?: "light" | "dark" | "lime" }) {
+  const toneClass =
+    tone === "dark"
+      ? "border-[#0c0a09] bg-[#0c0a09] text-white"
+      : tone === "lime"
+        ? "border-[#083300] bg-[#96ff1a] text-[#083300]"
+        : "border-[#e6e6e7] bg-[#f8f8f8] text-[#323232]";
+  return (
+    <div className={`rounded-[12px] border px-3 py-2 ${toneClass}`}>
+      <div className="text-[10px] font-bold uppercase opacity-65">{label}</div>
+      <div className="mt-1 truncate text-sm font-extrabold">{value}</div>
+    </div>
+  );
+}
+
+function InspectorModeButton({ mode, active, icon: Icon, label, onClick }: { mode: InspectorMode; active: InspectorMode; icon: any; label: string; onClick: (mode: InspectorMode) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onClick(mode)}
+      className={`flex flex-1 items-center justify-center gap-1.5 rounded-[10px] px-2 py-2 text-[11px] font-bold transition ${
+        active === mode ? "bg-[#0c0a09] text-white" : "bg-[#f2f1f0] text-[#71737a] hover:text-[#0c0a09]"
+      }`}
+    >
+      <Icon className="h-3.5 w-3.5" />
+      {label}
+    </button>
+  );
+}
+
+function JobActivity({ job }: { job?: GenerationJob | null }) {
+  if (!job) {
+    return (
+      <div className="rounded-[12px] border border-dashed border-[#e6e6e7] bg-white p-3 text-sm text-[#71737a]">
+        No active generation job yet.
+      </div>
+    );
+  }
+  const total = job.total_steps || 0;
+  const value = total ? Math.min(100, Math.round((job.progress / total) * 100)) : job.status === "completed" ? 100 : 8;
+  return (
+    <div className="rounded-[12px] border border-[#e6e6e7] bg-white p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[10px] font-bold uppercase text-[#71737a]">Live generation</div>
+          <div className="mt-1 truncate text-sm font-extrabold text-[#0c0a09]">{job.current_step || job.status}</div>
         </div>
+        <Badge className={statusTone(job.status)}>{job.status}</Badge>
+      </div>
+      <div className="mt-3">
+        <div className="mb-1 flex items-center justify-between text-[11px] font-bold text-[#71737a]">
+          <span>{total ? `Step ${job.progress} of ${total}` : "Queued"}</span>
+          <span>{value}%</span>
+        </div>
+        <Progress value={value} className="h-2 bg-[#e6e6e7] [&>div]:bg-[#96ff1a]" />
+      </div>
+      {job.error && <div className="mt-2 line-clamp-2 text-xs leading-5 text-red-600">{job.error}</div>}
+    </div>
+  );
+}
+
+function JsonBlock({ title, value }: { title: string; value: unknown }) {
+  return (
+    <section className="overflow-hidden rounded-[16px] border border-[#e6e6e7] bg-white">
+      <div className="border-b border-[#e6e6e7] px-4 py-3 text-[11px] font-bold uppercase text-[#71737a]">{title}</div>
+      <pre className="max-h-[360px] overflow-auto bg-[#f8f8f8] p-4 text-xs leading-5 text-[#323232]">{JSON.stringify(value, null, 2)}</pre>
+    </section>
+  );
+}
+
+function ReferencePanel({ items, onUpload, onRemove, disabled }: { items: RefAsset[]; onUpload: (files: FileList | null) => void; onRemove: (url: string) => void; disabled?: boolean }) {
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <div className="text-[11px] font-bold uppercase text-[#71737a]">Scene references</div>
+        <label htmlFor="scene-ref-upload">
+          <Button asChild variant="outline" size="sm" className="h-8 cursor-pointer">
+            <span><Upload className="h-3.5 w-3.5" /> Upload</span>
+          </Button>
+        </label>
+        <input id="scene-ref-upload" type="file" accept="image/*" multiple className="hidden" disabled={disabled} onChange={(e) => onUpload(e.target.files)} />
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        {items.map((item) => (
+          <div key={item.url} className="group relative overflow-hidden rounded-[10px] border border-[#e6e6e7] bg-[#f2f1f0]">
+            <img src={item.url} alt={item.name} className="h-16 w-full object-cover" />
+            <button type="button" onClick={() => onRemove(item.url)} className="absolute right-1 top-1 rounded bg-black/70 p-1 text-white opacity-0 group-hover:opacity-100">
+              <Trash2 className="h-3 w-3" />
+            </button>
+          </div>
+        ))}
+        {!items.length && <div className="col-span-3 rounded-[10px] border border-dashed border-[#e6e6e7] p-3 text-xs text-[#71737a]">No refs uploaded.</div>}
       </div>
     </div>
   );
@@ -126,37 +376,35 @@ export default function StoryDetail() {
   const [, setLocation] = useLocation();
   const qc = useQueryClient();
   const id = params?.id || "";
-  const [selectedSceneId, setSelectedSceneId] = useState<string>("");
+  const [selectedSceneId, setSelectedSceneId] = useState("");
+  const [tab, setTab] = useState<WorkspaceTab>("design");
+  const [selectedHistoryId, setSelectedHistoryId] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [prompt, setPrompt] = useState("");
+  const [sceneRefUploading, setSceneRefUploading] = useState(false);
+  const [inspectorMode, setInspectorMode] = useState<InspectorMode>("scene");
+  const [canvasZoom, setCanvasZoom] = useState([92]);
 
   const { data: story, isLoading: storyLoading } = useQuery({
     queryKey: ["story", id],
     queryFn: () => api.getStory(id),
     enabled: !!id,
-    refetchInterval: (query) =>
-      query.state.data?.status === "generating" || query.state.data?.status === "checkpoint_review" ? 5000 : false,
+    refetchInterval: (query) => query.state.data?.status === "generating" || query.state.data?.status === "checkpoint_review" ? 5000 : false,
   });
-
-  const { data: characters = [] } = useQuery({
-    queryKey: ["characters", id],
-    queryFn: () => api.getCharacters(id),
-    enabled: !!id,
-  });
-
+  const { data: characters = [] } = useQuery({ queryKey: ["characters", id], queryFn: () => api.getCharacters(id), enabled: !!id });
   const { data: episodes = [] } = useQuery({
     queryKey: ["episodes", id],
     queryFn: () => api.getEpisodes(id),
     enabled: !!id,
     refetchInterval: story?.status === "generating" || story?.status === "checkpoint_review" ? 5000 : false,
   });
-
-  const { data: storyHistory = [] } = useQuery({
-    queryKey: ["story-history", id],
-    queryFn: () => api.getStoryHistory(id),
+  const { data: storyHistory = [] } = useQuery({ queryKey: ["story-history", id], queryFn: () => api.getStoryHistory(id), enabled: !!id });
+  const { data: storyJobs = [] } = useQuery({
+    queryKey: ["story-jobs", id],
+    queryFn: () => api.getEntityJobs("story", id),
     enabled: !!id,
+    refetchInterval: story?.status === "generating" || story?.status === "checkpoint_review" ? 3000 : false,
   });
-
   const { data: checkpoints = [] } = useQuery({
     queryKey: ["checkpoints", id],
     queryFn: () => api.getStoryCheckpoints(id),
@@ -165,16 +413,18 @@ export default function StoryDetail() {
   });
 
   const allScenes = useMemo(() => episodes.flatMap((episode) => episode.scenes ?? []), [episodes]);
-  const selectedScene = useMemo(
-    () => allScenes.find((scene) => scene.id === selectedSceneId) ?? allScenes[0] ?? null,
-    [allScenes, selectedSceneId],
-  );
+  const selectedScene = useMemo(() => allScenes.find((scene) => scene.id === selectedSceneId) ?? allScenes[0] ?? null, [allScenes, selectedSceneId]);
+  const selectedEpisode = useMemo(() => episodes.find((episode) => episode.scenes?.some((scene) => scene.id === selectedScene?.id)) ?? episodes[0], [episodes, selectedScene]);
+  const selectedHistory = useMemo(() => storyHistory.find((entry) => entry.id === selectedHistoryId) ?? storyHistory[0] ?? null, [storyHistory, selectedHistoryId]);
+  const latestStoryJob = useMemo(() => storyJobs[0] ?? null, [storyJobs]);
 
   useEffect(() => {
-    if (!selectedSceneId && allScenes.length > 0) {
-      setSelectedSceneId(allScenes[0].id);
-    }
+    if (!selectedSceneId && allScenes.length > 0) setSelectedSceneId(allScenes[0].id);
   }, [allScenes, selectedSceneId]);
+
+  useEffect(() => {
+    if (!selectedHistoryId && storyHistory.length > 0) setSelectedHistoryId(storyHistory[0].id);
+  }, [storyHistory, selectedHistoryId]);
 
   const { data: sceneHistory = [] } = useQuery({
     queryKey: ["scene-history", selectedScene?.id],
@@ -183,25 +433,13 @@ export default function StoryDetail() {
   });
 
   const latestAudioCheckpoint = useMemo(
-    () =>
-      [...checkpoints]
-        .filter((checkpoint) => checkpoint.narration_audio_url || checkpoint.audio_status === "completed")
-        .sort((a, b) => (a.batch_number || 0) - (b.batch_number || 0))
-        .slice(-1)[0] ?? null,
+    () => [...checkpoints].filter((checkpoint) => checkpoint.narration_audio_url || checkpoint.audio_status === "completed").sort((a, b) => (a.batch_number || 0) - (b.batch_number || 0)).slice(-1)[0] ?? null,
     [checkpoints],
   );
-
   const activeCheckpoint = checkpoints.find((checkpoint) => checkpoint.status === "pending_review") ?? null;
-  const checkpointAudioReady =
-    !activeCheckpoint?.audio_status ||
-    activeCheckpoint.audio_status === "completed" ||
-    activeCheckpoint.audio_status === "failed";
+  const checkpointAudioReady = !activeCheckpoint?.audio_status || activeCheckpoint.audio_status === "completed" || activeCheckpoint.audio_status === "failed";
 
-  const approveOutline = useMutation({
-    mutationFn: () => api.approveOutline(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["story", id] }),
-  });
-
+  const approveOutline = useMutation({ mutationFn: () => api.approveOutline(id), onSuccess: () => qc.invalidateQueries({ queryKey: ["story", id] }) });
   const generateStory = useMutation({
     mutationFn: () => api.generateStory(id),
     onSuccess: () => {
@@ -209,7 +447,6 @@ export default function StoryDetail() {
       qc.invalidateQueries({ queryKey: ["episodes", id] });
     },
   });
-
   const approveCheckpoint = useMutation({
     mutationFn: (checkpointId: string) => api.approveCheckpoint(id, checkpointId),
     onSuccess: () => {
@@ -217,37 +454,32 @@ export default function StoryDetail() {
       qc.invalidateQueries({ queryKey: ["checkpoints", id] });
     },
   });
+  const approveScene = useMutation({ mutationFn: (sceneId: string) => api.approveScene(sceneId), onSuccess: () => qc.invalidateQueries({ queryKey: ["episodes", id] }) });
+  const rejectScene = useMutation({ mutationFn: (sceneId: string) => api.rejectScene(sceneId), onSuccess: () => qc.invalidateQueries({ queryKey: ["episodes", id] }) });
+  const lockScene = useMutation({ mutationFn: (sceneId: string) => api.lockScene(sceneId), onSuccess: () => qc.invalidateQueries({ queryKey: ["episodes", id] }) });
+  const regenerateScene = useMutation({ mutationFn: (sceneId: string) => api.regenerateScene(sceneId), onSuccess: () => qc.invalidateQueries({ queryKey: ["episodes", id] }) });
 
-  const approveScene = useMutation({
-    mutationFn: (sceneId: string) => api.approveScene(sceneId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["episodes", id] }),
-  });
+  const sceneReferenceUrls = useMemo(() => {
+    const raw = selectedScene?.state_snapshot?.reference_image_urls;
+    return Array.isArray(raw) ? raw.filter((item): item is string => typeof item === "string" && item.length > 0) : [];
+  }, [selectedScene]);
 
-  const rejectScene = useMutation({
-    mutationFn: (sceneId: string) => api.rejectScene(sceneId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["episodes", id] }),
-  });
-
-  const lockScene = useMutation({
-    mutationFn: (sceneId: string) => api.lockScene(sceneId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["episodes", id] }),
-  });
-
-  const regenerateScene = useMutation({
-    mutationFn: (sceneId: string) => api.regenerateScene(sceneId),
-    onSuccess: () => {
+  const uploadSceneRefs = async (files: FileList | null) => {
+    if (!selectedScene || !files?.length) return;
+    setSceneRefUploading(true);
+    try {
+      const uploads = await Promise.all(Array.from(files).map(async (file) => (await api.uploadImage(file)).url));
+      await api.updateSceneReferences(selectedScene.id, [...sceneReferenceUrls, ...uploads]);
       qc.invalidateQueries({ queryKey: ["episodes", id] });
-    },
-  });
+      qc.invalidateQueries({ queryKey: ["scene-history", selectedScene.id] });
+    } finally {
+      setSceneRefUploading(false);
+    }
+  };
 
   useEffect(() => {
     if (!story || messages.length > 0) return;
-    setMessages([
-      {
-        role: "assistant",
-        text: `Console ready for ${story.title}. Select a scene, approve the outline, or regenerate the current frame.`,
-      },
-    ]);
+    setMessages([{ role: "assistant", text: `Workspace loaded for ${story.title}. Review the outline, open story text, or select a scene.` }]);
   }, [story, messages.length]);
 
   const sendMessage = (text: string) => {
@@ -255,47 +487,27 @@ export default function StoryDetail() {
     if (!trimmed) return;
     setMessages((prev) => [...prev, { role: "user", text: trimmed }]);
     const lower = trimmed.toLowerCase();
-
     if (lower.includes("approve outline") && story?.status === "draft") {
       approveOutline.mutate();
       setMessages((prev) => [...prev, { role: "assistant", text: "Outline approval queued." }]);
-      return;
-    }
-    if (lower.includes("approve checkpoint") && activeCheckpoint?.id && checkpointAudioReady) {
+    } else if (lower.includes("approve checkpoint") && activeCheckpoint?.id && checkpointAudioReady) {
       approveCheckpoint.mutate(activeCheckpoint.id);
       setMessages((prev) => [...prev, { role: "assistant", text: "Checkpoint approval queued." }]);
-      return;
-    }
-    if (lower.includes("generate story") || lower === "generate") {
+    } else if (lower.includes("generate")) {
       generateStory.mutate();
-      setMessages((prev) => [...prev, { role: "assistant", text: "Story generation queued." }]);
-      return;
-    }
-    if (lower.includes("approve scene") && selectedScene) {
+      setMessages((prev) => [...prev, { role: "assistant", text: "Generation queued." }]);
+    } else if (lower.includes("approve scene") && selectedScene) {
       approveScene.mutate(selectedScene.id);
       setMessages((prev) => [...prev, { role: "assistant", text: `Scene ${selectedScene.scene_number} approval queued.` }]);
-      return;
-    }
-    if (lower.includes("reject scene") && selectedScene) {
+    } else if (lower.includes("reject scene") && selectedScene) {
       rejectScene.mutate(selectedScene.id);
       setMessages((prev) => [...prev, { role: "assistant", text: `Scene ${selectedScene.scene_number} rejection queued.` }]);
-      return;
-    }
-    if (lower.includes("regenerate") && selectedScene) {
+    } else if (lower.includes("regenerate") && selectedScene) {
       regenerateScene.mutate(selectedScene.id);
       setMessages((prev) => [...prev, { role: "assistant", text: `Scene ${selectedScene.scene_number} regeneration queued.` }]);
-      return;
+    } else {
+      setMessages((prev) => [...prev, { role: "assistant", text: selectedScene ? `Focused on ${selectedScene.title || `Scene ${selectedScene.scene_number}`}.` : "Open the outline or select a scene." }]);
     }
-
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "assistant",
-        text: selectedScene
-          ? `Focused on ${selectedScene.title || `Scene ${selectedScene.scene_number}`}. I can approve, regenerate, or lock the current version.`
-          : "Pick a scene to inspect it here.",
-      },
-    ]);
   };
 
   const onSubmitPrompt = (e: FormEvent<HTMLFormElement>) => {
@@ -304,349 +516,209 @@ export default function StoryDetail() {
     setPrompt("");
   };
 
-  const currentMedia = selectedScene?.image_url || selectedScene?.clip_url || selectedScene?.video_url;
-  const currentKind = selectedScene?.media_kind || (selectedScene?.image_url ? "image" : "video");
+  if (storyLoading) return <div className="flex h-screen items-center justify-center bg-[#f2f1f0] text-[#71737a]">Loading workspace...</div>;
+  if (!story) return <div className="flex h-screen items-center justify-center bg-[#f2f1f0] text-[#0c0a09]">Story not found.</div>;
 
-  if (storyLoading) {
-    return (
-      <Layout>
-        <div className="min-h-[60vh] bg-white" />
-      </Layout>
-    );
-  }
-
-  if (!story) {
-    return (
-      <Layout>
-        <div className="mx-auto max-w-[1200px] px-4 py-20 md:px-6">
-          <div className="rounded-[16px] border border-border bg-white p-8 text-sm text-muted-foreground">
-            Story not found.
-          </div>
-        </div>
-      </Layout>
-    );
-  }
+  const currentMedia = selectedEpisode?.assembled_video_url || selectedScene?.image_url || selectedScene?.media_url || selectedScene?.clip_url || selectedScene?.video_url;
+  const currentKind = selectedEpisode?.assembled_video_url
+    ? "video"
+    : selectedScene?.media_kind || (selectedScene?.image_url || selectedScene?.media_url ? "image" : "video");
+  const expectedScenes = (story.num_episodes || 1) * (story.num_scenes || 0);
+  const completedScenes = allScenes.filter((scene) => scene.status === "completed" || scene.status === "ready").length;
+  const approvedScenes = allScenes.filter((scene) => scene.approval_status === "approved").length;
+  const progressValue = latestStoryJob?.total_steps
+    ? Math.min(100, Math.round((latestStoryJob.progress / latestStoryJob.total_steps) * 100))
+    : expectedScenes
+      ? Math.min(100, Math.round((completedScenes / expectedScenes) * 100))
+      : 0;
+  const zoomScale = Math.max(0.62, Math.min(1.1, canvasZoom[0] / 100));
 
   return (
-    <Layout>
-      <div className="bg-white">
-        <section className="border-b border-border">
-          <div className="mx-auto flex max-w-[1200px] flex-col gap-4 px-4 py-8 md:px-6">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <Link href="/dashboard">
-                  <Button variant="ghost" size="sm" className="px-2">
-                    <ArrowLeft className="h-4 w-4" />
-                    Dashboard
-                  </Button>
-                </Link>
-                <div className="min-w-0">
-                  <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
-                    {story.workflow_type}
-                  </div>
-                  <h1 className="truncate font-display text-[40px] leading-[1] tracking-[-0.04em] text-foreground md:text-[54px]">
-                    {story.title}
-                  </h1>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <div className={`inline-flex items-center rounded-[9999px] border px-3 py-1.5 text-[11px] font-medium ${storyTone(story.status)}`}>
-                  {story.status}
-                </div>
-                {story.status === "draft" && (
-                  <Button variant="lime" onClick={() => approveOutline.mutate()} disabled={approveOutline.isPending}>
-                    {approveOutline.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-                    Approve outline
-                  </Button>
-                )}
-                {story.status === "approved" && (
-                  <Button variant="lime" onClick={() => generateStory.mutate()} disabled={generateStory.isPending}>
-                    {generateStory.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}
-                    Generate
-                  </Button>
-                )}
-                {activeCheckpoint && (
-                  <Button
-                    variant="outline"
-                    onClick={() => approveCheckpoint.mutate(activeCheckpoint.id)}
-                    disabled={!checkpointAudioReady || approveCheckpoint.isPending}
-                  >
-                    {approveCheckpoint.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                    Approve checkpoint
-                  </Button>
-                )}
-              </div>
-            </div>
-
-            <p className="max-w-3xl text-[16px] leading-7 text-muted-foreground">
-              {story.prompt}
-            </p>
-
-            <div className="flex flex-wrap gap-2">
-              <Badge className="border-border bg-muted text-foreground">{story.workflow_version || "v1"}</Badge>
-              <Badge className="border-border bg-muted text-foreground">{story.generation_version || "v1"}</Badge>
-              <Badge className="border-border bg-muted text-foreground">{story.approval_status}</Badge>
-            </div>
+    <div className="h-screen overflow-hidden bg-[#f2f1f0] text-[#0c0a09]">
+      <header className="flex h-14 items-center gap-3 border-b border-[#e6e6e7] bg-white px-4">
+        <Link href="/dashboard">
+          <Button variant="ghost" size="sm" className="px-2">
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+        </Link>
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-[#96ff1a] text-[#083300]">
+            <Sparkles className="h-4 w-4" />
           </div>
-        </section>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-extrabold">{story.title}</div>
+            <div className="text-[11px] text-[#71737a]">{story.workflow_type}</div>
+          </div>
+          <Badge className={statusTone(story.status)}>{story.status}</Badge>
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          {story.status === "draft" && (
+            <Button variant="lime" size="sm" onClick={() => approveOutline.mutate()} disabled={approveOutline.isPending}>
+              {approveOutline.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+              Approve outline
+            </Button>
+          )}
+          {story.status === "approved" && (
+            <Button variant="lime" size="sm" onClick={() => generateStory.mutate()} disabled={generateStory.isPending}>
+              {generateStory.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}
+              Generate
+            </Button>
+          )}
+          {activeCheckpoint && (
+            <Button variant="outline" size="sm" onClick={() => approveCheckpoint.mutate(activeCheckpoint.id)} disabled={!checkpointAudioReady || approveCheckpoint.isPending}>
+              <CheckCircle2 className="h-4 w-4" />
+              Approve checkpoint
+            </Button>
+          )}
+        </div>
+      </header>
 
-        <section className="mx-auto grid max-w-[1200px] gap-6 px-4 py-8 md:px-6 lg:grid-cols-[360px_1fr]">
-          <aside className="space-y-4">
-            <div className="rounded-[16px] border border-border bg-[color:#121212] p-5 text-white">
-              <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.16em] text-white/60">
-                <MessageSquareText className="h-3.5 w-3.5 text-[color:#96ff1a]" />
-                AI chat
-              </div>
-
-              <div className="mt-4 flex h-[460px] flex-col gap-3 overflow-y-auto pr-1">
-                {messages.map((message, index) => (
-                  <div
-                    key={`${message.role}-${index}`}
-                    className={`max-w-[90%] rounded-[16px] px-4 py-3 text-sm leading-6 ${
-                      message.role === "assistant"
-                        ? "bg-white/8 border border-white/10 text-white"
-                        : "ml-auto bg-[color:#96ff1a] text-[color:#083300]"
-                    }`}
-                  >
-                    {message.text}
-                  </div>
-                ))}
-              </div>
-
-              <div className="mt-4 flex flex-wrap gap-2">
-                {[
-                  "approve outline",
-                  "generate story",
-                  "approve scene",
-                  "regenerate",
-                ].map((chip) => (
-                  <button
-                    key={chip}
-                    type="button"
-                    onClick={() => {
-                      setPrompt(chip);
-                      sendMessage(chip);
-                    }}
-                    className="rounded-[9999px] border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] text-white/70 transition-colors hover:bg-white/10"
-                  >
-                    {chip}
-                  </button>
-                ))}
-              </div>
-
-              <form onSubmit={onSubmitPrompt} className="mt-4 flex gap-2">
-                <Input
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  placeholder="Ask the console to act"
-                  className="border-white/10 bg-white/5 text-white placeholder:text-white/40"
-                />
-                <Button type="submit" variant="lime" className="shrink-0">
-                  <Send className="h-4 w-4" />
-                </Button>
-              </form>
+      <div className="grid h-[calc(100vh-56px)] grid-cols-[260px_minmax(0,1fr)_360px] grid-rows-[minmax(0,1fr)_240px] gap-4 p-4">
+        <aside className="row-span-2 overflow-hidden rounded-[24px] border border-[#e6e6e7] bg-white">
+          <div className="flex items-center justify-between border-b border-[#e6e6e7] px-4 py-3">
+            <div>
+              <div className="text-[11px] font-bold uppercase text-[#71737a]">Workspace</div>
+              <div className="mt-1 text-sm font-extrabold text-[#0c0a09]">Production map</div>
             </div>
-
-            <div className="rounded-[16px] border border-border bg-white p-5">
-              <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">History</div>
+            <Badge className="border-[#e6e6e7] bg-[#f2f1f0] text-[#323232]">{allScenes.length}/{expectedScenes || "-"}</Badge>
+          </div>
+          <div className="h-[calc(100%-56px)] overflow-y-auto p-4">
+            <div className="rounded-[18px] border border-[#e6e6e7] bg-[#f8f8f8] p-4">
+              <div className="text-[11px] font-bold uppercase text-[#71737a]">Production docs</div>
               <div className="mt-3 space-y-2">
-                {storyHistory.slice(0, 6).map((entry) => (
-                  <HistoryLine key={entry.id} entry={entry} />
-                ))}
+                <button type="button" onClick={() => setTab("outline")} className="flex w-full items-center justify-between rounded-[12px] bg-white px-3 py-2 text-left text-sm font-semibold hover:bg-[#e6ffc8]">
+                  <span className="flex items-center gap-2"><FileText className="h-4 w-4" /> Outline</span>
+                  <ChevronRight className="h-4 w-4 text-[#71737a]" />
+                </button>
+                <button type="button" onClick={() => setTab("script")} className="flex w-full items-center justify-between rounded-[12px] bg-white px-3 py-2 text-left text-sm font-semibold hover:bg-[#e6ffc8]">
+                  <span className="flex items-center gap-2"><Clapperboard className="h-4 w-4" /> Story text</span>
+                  <ChevronRight className="h-4 w-4 text-[#71737a]" />
+                </button>
+                <button type="button" onClick={() => setTab("history")} className="flex w-full items-center justify-between rounded-[12px] bg-white px-3 py-2 text-left text-sm font-semibold hover:bg-[#e6ffc8]">
+                  <span className="flex items-center gap-2"><History className="h-4 w-4" /> History</span>
+                  <span className="text-xs text-[#71737a]">{storyHistory.length}</span>
+                </button>
               </div>
             </div>
 
-            <div className="rounded-[16px] border border-border bg-white p-5">
-              <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Cast</div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {characters.length > 0 ? characters.slice(0, 8).map((character: Character) => (
-                  <div
-                    key={character.id}
-                    className="rounded-[9999px] border border-border bg-muted px-3 py-1.5 text-[11px] text-foreground"
-                  >
-                    {character.name}
-                  </div>
-                )) : (
-                  <div className="text-sm text-muted-foreground">No characters yet.</div>
-                )}
+            <div className="mt-4 space-y-3">
+              <div className="flex items-center justify-between text-[11px] font-bold uppercase text-[#71737a]">
+                <span>Episodes</span>
+                <span>{episodes.length}</span>
               </div>
-            </div>
-          </aside>
-
-          <div className="space-y-5">
-            <div className="rounded-[16px] border border-border bg-white p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Generated parts</div>
-                  <div className="mt-1 text-sm text-foreground">
-                    {allScenes.length} scenes available
+              {episodes.map((episode) => (
+                <div key={episode.id} className="rounded-[18px] border border-[#e6e6e7] bg-white p-3">
+                  <div className="flex items-center gap-2 text-xs font-extrabold text-[#0c0a09]">
+                    <Layers3 className="h-4 w-4" />
+                    E{episode.episode_number}
                   </div>
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {selectedScene ? `Selected scene ${selectedScene.scene_number}` : "No scene selected"}
-                </div>
-              </div>
-              <div className="mt-4 flex gap-3 overflow-x-auto pb-1 [scrollbar-width:none]">
-                {allScenes.map((scene) => (
-                  <SceneTile
-                    key={scene.id}
-                    scene={scene}
-                    active={scene.id === selectedScene?.id}
-                    onClick={() => setSelectedSceneId(scene.id)}
-                  />
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-[16px] border border-border bg-[color:#121212] p-4 text-white">
-              <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-4">
-                <div className="min-w-0">
-                  <div className="text-[11px] uppercase tracking-[0.16em] text-white/55">
-                    {selectedScene ? `Episode ${episodes.find((ep) => ep.scenes?.some((scene) => scene.id === selectedScene.id))?.episode_number ?? ""}` : "Preview"}
-                  </div>
-                  <h2 className="mt-1 truncate text-[20px] font-semibold text-white">
-                    {selectedScene?.title || "Select a scene"}
-                  </h2>
-                  <p className="mt-1 max-w-3xl text-sm leading-6 text-white/65">
-                    {selectedScene?.description || story.prompt}
-                  </p>
-                </div>
-
-                {selectedScene && (
-                  <div className="flex flex-wrap justify-end gap-2">
-                    <Button
-                      size="sm"
-                      variant="lime"
-                      onClick={() => approveScene.mutate(selectedScene.id)}
-                      disabled={approveScene.isPending || selectedScene.approval_status === "approved"}
-                    >
-                      {approveScene.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ThumbsUp className="h-4 w-4" />}
-                      Approve
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => rejectScene.mutate(selectedScene.id)}
-                      disabled={rejectScene.isPending || selectedScene.approval_status === "rejected"}
-                    >
-                      {rejectScene.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ThumbsDown className="h-4 w-4" />}
-                      Reject
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => regenerateScene.mutate(selectedScene.id)}
-                      disabled={regenerateScene.isPending}
-                    >
-                      {regenerateScene.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                      Regenerate
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => lockScene.mutate(selectedScene.id)}
-                      disabled={lockScene.isPending || !!selectedScene.locked}
-                    >
-                      <Lock className="h-4 w-4" />
-                      Lock
-                    </Button>
-                  </div>
-                )}
-              </div>
-
-              <div className="mt-4 overflow-hidden rounded-[14px] border border-white/10 bg-black">
-                {currentMedia ? (
-                  currentKind === "image" ? (
-                    <img
-                      src={currentMedia}
-                      alt={selectedScene?.title || "Selected scene"}
-                      className="aspect-video w-full object-contain bg-black"
-                    />
-                  ) : (
-                    <video
-                      src={currentMedia}
-                      className="aspect-video w-full object-contain bg-black"
-                      controls
-                      playsInline
-                      muted
-                      preload="metadata"
-                    />
-                  )
-                ) : (
-                  <div className="flex aspect-video items-center justify-center">
-                    <div className="text-center text-white/40">
-                      <Video className="mx-auto h-10 w-10" />
-                      <div className="mt-2 text-sm">No media on this scene yet</div>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="mt-4 grid gap-3 md:grid-cols-4">
-                {[
-                  { label: "Version", value: selectedScene?.generation_version || story.generation_version || "v1" },
-                  { label: "Image model", value: selectedScene?.image_model || "-" },
-                  { label: "Edit model", value: selectedScene?.edit_model || "-" },
-                  { label: "Regen count", value: selectedScene?.regeneration_count ?? 0 },
-                ].map((item) => (
-                  <div key={item.label} className="rounded-[14px] border border-white/10 bg-white/5 px-4 py-3">
-                    <div className="text-[10px] uppercase tracking-[0.16em] text-white/45">{item.label}</div>
-                    <div className="mt-1 text-sm text-white">{item.value}</div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_320px]">
-                <div className="rounded-[14px] border border-white/10 bg-white/5 p-4">
-                  <div className="text-[11px] uppercase tracking-[0.16em] text-white/55">Selected scene history</div>
-                  <div className="mt-3 space-y-2">
-                    {sceneHistory.slice(0, 4).map((entry) => (
-                      <div
-                        key={entry.id}
-                        className="flex items-start justify-between gap-3 rounded-[12px] border border-white/10 bg-black/20 px-3 py-2 text-sm text-white/80"
+                  <div className="mt-1 truncate text-sm text-[#323232]">{episode.title}</div>
+                  <div className="mt-3 space-y-1">
+                    {(episode.scenes || []).map((scene) => (
+                      <button
+                        key={scene.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedSceneId(scene.id);
+                          setTab("design");
+                        }}
+                        className={`flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-xs transition ${
+                          selectedScene?.id === scene.id ? "bg-[#e6ffc8] text-[#083300]" : "bg-[#f8f8f8] hover:bg-[#f2f1f0]"
+                        }`}
                       >
-                        <span className="truncate">{entry.event_type}</span>
-                        <span className="text-[10px] text-white/40">v{entry.revision}</span>
-                      </div>
+                        <Film className="h-4 w-4 shrink-0" />
+                        <span className="min-w-0 flex-1 truncate">S{scene.scene_number} {scene.title || "Scene"}</span>
+                        <span className="text-[10px] text-[#71737a]">{scene.status}</span>
+                      </button>
                     ))}
-                    {!sceneHistory.length && (
-                      <div className="text-sm text-white/45">No scene history yet.</div>
-                    )}
                   </div>
                 </div>
-
-                <div className="rounded-[14px] border border-white/10 bg-white/5 p-4">
-                  <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.16em] text-white/55">
-                    <Clock3 className="h-3.5 w-3.5" />
-                    Audio
-                  </div>
-                  {latestAudioCheckpoint?.narration_audio_url ? (
-                    <div className="mt-3 space-y-3">
-                      <audio controls className="w-full" src={latestAudioCheckpoint.narration_audio_url} />
-                      <div className="text-sm text-white/80">
-                        {latestAudioCheckpoint.narration_text || "Narration is available for this batch."}
-                      </div>
-                      <div className="flex flex-wrap gap-2 text-[11px] text-white/55">
-                        <span className="rounded-[9999px] border border-white/10 bg-white/5 px-2.5 py-1">
-                          batch {latestAudioCheckpoint.batch_number}
-                        </span>
-                        <span className="rounded-[9999px] border border-white/10 bg-white/5 px-2.5 py-1">
-                          {latestAudioCheckpoint.narration_voice || "voice"}
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="mt-3 text-sm text-white/45">
-                      No audio has been generated yet.
-                    </div>
-                  )}
-                </div>
-              </div>
+              ))}
             </div>
           </div>
-        </section>
+        </aside>
+
+        <ConsoleStage
+          story={story}
+          episodes={episodes}
+          scenes={allScenes}
+          selectedScene={selectedScene}
+          selectedEpisode={selectedEpisode}
+          onSelectScene={setSelectedSceneId}
+          onOpenOutline={() => setTab("outline")}
+          onOpenScript={() => setTab("script")}
+          onOpenHistory={() => setTab("history")}
+          onApproveScene={(sceneId) => approveScene.mutate(sceneId)}
+          onRejectScene={(sceneId) => rejectScene.mutate(sceneId)}
+          onRegenerateScene={(sceneId) => regenerateScene.mutate(sceneId)}
+          onLockScene={(sceneId) => lockScene.mutate(sceneId)}
+          currentMedia={currentMedia}
+          currentKind={currentKind}
+          zoom={canvasZoom[0]}
+          onZoomChange={setCanvasZoom}
+          latestStepLabel={latestStoryJob?.current_step || latestStoryJob?.status || null}
+        />
+
+        <ConsoleInspector
+          story={story}
+          latestJob={latestStoryJob}
+          scene={selectedScene}
+          characters={characters}
+          storyHistory={storyHistory}
+          sceneHistory={sceneHistory}
+          referenceUrls={sceneReferenceUrls}
+          onReferenceUpload={(files) => void uploadSceneRefs(files)}
+          onReferenceRemove={(url) => void (async () => {
+            if (!selectedScene) return;
+            await api.updateSceneReferences(selectedScene.id, sceneReferenceUrls.filter((item) => item !== url));
+            qc.invalidateQueries({ queryKey: ["episodes", id] });
+            qc.invalidateQueries({ queryKey: ["scene-history", selectedScene.id] });
+          })()}
+          onApproveOutline={() => approveOutline.mutate()}
+          onGenerate={() => generateStory.mutate()}
+          onApproveScene={(sceneId) => approveScene.mutate(sceneId)}
+          onRejectScene={(sceneId) => rejectScene.mutate(sceneId)}
+          onRegenerateScene={(sceneId) => regenerateScene.mutate(sceneId)}
+          onLockScene={(sceneId) => lockScene.mutate(sceneId)}
+          onOpenHistory={() => setTab("history")}
+          onSetMode={setInspectorMode}
+          mode={inspectorMode}
+          progressValue={progressValue}
+          completedScenes={completedScenes}
+          expectedScenes={expectedScenes}
+          approvedScenes={approvedScenes}
+          sceneRefUploading={sceneRefUploading}
+        />
+
+        <div className="col-span-2 col-start-2 row-start-2">
+          <ConsoleBottomTray
+            latestJobLabel={latestStoryJob?.current_step || latestStoryJob?.status || null}
+            messages={messages}
+            prompt={prompt}
+            setPrompt={setPrompt}
+            onSubmit={onSubmitPrompt}
+            latestAudioCheckpoint={latestAudioCheckpoint}
+          />
+        </div>
       </div>
-    </Layout>
+
+      <Dialog open={tab !== "design"} onOpenChange={(open) => !open && setTab("design")}>
+        <DialogContent className="max-h-[85vh] max-w-5xl overflow-hidden rounded-[24px] border-[#e6e6e7] bg-white">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-extrabold text-[#0c0a09]">
+              {tab === "outline" ? "Outline" : tab === "script" ? "Story text" : "History"}
+            </DialogTitle>
+            <DialogDescription>
+              {tab === "outline" ? "Generated structure, episode summaries, and scene guidance." : tab === "script" ? "Readable story text built from the outline." : "Revision history and state snapshots."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[70vh] overflow-y-auto">
+            {tab === "outline" && <OutlineView story={story} />}
+            {tab === "script" && <ScriptView story={story} />}
+            {tab === "history" && <HistoryView entries={storyHistory} selected={selectedHistory} onSelect={(entry) => setSelectedHistoryId(entry.id)} />}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }

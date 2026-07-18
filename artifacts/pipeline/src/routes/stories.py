@@ -12,6 +12,21 @@ router = APIRouter(prefix="/pipeline/stories", tags=["stories"])
 
 
 def _build_story_response(row, plan_data) -> StoryResponse:
+    workflow_state = row.get("workflow_state")
+    if isinstance(workflow_state, str):
+        try:
+            workflow_state = json.loads(workflow_state)
+        except Exception:
+            workflow_state = None
+    if workflow_state is None:
+        workflow_state = {}
+
+    if isinstance(plan_data, str):
+        try:
+            plan_data = json.loads(plan_data)
+        except Exception:
+            plan_data = None
+
     return StoryResponse(
         id=str(row["id"]),
         title=row["title"],
@@ -25,7 +40,7 @@ def _build_story_response(row, plan_data) -> StoryResponse:
         workflow_version=row.get("workflow_version", "v1"),
         generation_version=row.get("generation_version", "v1"),
         approval_status=row.get("approval_status", "pending_approval"),
-        workflow_state=row.get("workflow_state"),
+        workflow_state=workflow_state,
         episode_plan=plan_data,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -64,6 +79,11 @@ def _history_row_to_response(row, entity_type: str) -> HistoryEntryResponse:
 async def create_story(body: StoryCreate, user=Depends(get_current_user)):
     pool = await get_pool()
     owner_id = user_id(user)
+    workflow_state = {
+        "style_reference_urls": [u for u in body.style_reference_urls if u],
+        "character_reference_urls": [u for u in body.character_reference_urls if u],
+        "scene_reference_urls": [u for u in body.scene_reference_urls if u],
+    }
 
     bibles = []
     if body.bible_ids:
@@ -91,6 +111,7 @@ async def create_story(body: StoryCreate, user=Depends(get_current_user)):
             num_scenes=body.num_scenes,
             workflow_type=body.workflow_type.value,
             bibles=bibles,
+            reference_context=workflow_state,
         )
 
     row = await pool.fetchrow(
@@ -98,7 +119,7 @@ async def create_story(body: StoryCreate, user=Depends(get_current_user)):
            (owner_id, title, prompt, genre, style, num_episodes, num_scenes, status,
             workflow_type, workflow_version, generation_version, workflow_state,
             approval_status, episode_plan)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,'v1','v1','{}'::jsonb,'pending_approval',$9::jsonb)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,'v1','v1',$9::jsonb,'pending_approval',$10::jsonb)
            RETURNING *""",
         owner_id,
         body.title,
@@ -108,6 +129,7 @@ async def create_story(body: StoryCreate, user=Depends(get_current_user)):
         body.num_episodes,
         body.num_scenes,
         body.workflow_type.value,
+        json.dumps(workflow_state),
         json.dumps(plan),
     )
     story_id = str(row["id"])
@@ -135,7 +157,12 @@ async def create_story(body: StoryCreate, user=Depends(get_current_user)):
 
     plan_characters = plan.get("characters", [])
     if plan_characters:
-        await _insert_plan_characters(pool, story_id, plan_characters)
+        await _insert_plan_characters(
+            pool,
+            story_id,
+            plan_characters,
+            seed_ref_urls=workflow_state["character_reference_urls"] or workflow_state["style_reference_urls"],
+        )
 
     for ep in plan.get("episodes", []):
         await pool.execute(
@@ -153,9 +180,10 @@ async def create_story(body: StoryCreate, user=Depends(get_current_user)):
     return _build_story_response(row, plan_data)
 
 
-async def _insert_plan_characters(pool, story_id: str, characters: list[dict]):
+async def _insert_plan_characters(pool, story_id: str, characters: list[dict], seed_ref_urls: list[str] | None = None):
     inserted = 0
     skipped = 0
+    refs = [u for u in (seed_ref_urls or []) if u]
     for char in characters:
         name = char.get("name", "").strip()
         if not name:
@@ -164,7 +192,7 @@ async def _insert_plan_characters(pool, story_id: str, characters: list[dict]):
         row = await pool.fetchrow(
             """INSERT INTO characters
                (story_id, name, description, role, personality, appearance, ref_image_urls)
-               VALUES ($1,$2,$3,$4,$5,$6,'[]'::jsonb)
+               VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
                ON CONFLICT (story_id, name) DO NOTHING
                RETURNING id""",
             story_id,
@@ -173,6 +201,7 @@ async def _insert_plan_characters(pool, story_id: str, characters: list[dict]):
             char.get("role", "main"),
             char.get("personality", ""),
             char.get("appearance", ""),
+            json.dumps(refs),
         )
         if row:
             inserted += 1

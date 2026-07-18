@@ -37,127 +37,61 @@ fs.writeFileSync(path.join(distServerDir, 'index.js'), makeServerBundle());
 
 function makeServerBundle() {
   return `import fs from 'node:fs';
-import path from 'node:path';
-import http from 'node:http';
-import { spawn } from 'node:child_process';
+const manifest = JSON.parse(fs.readFileSync(new URL('../.openai/hosting.json', import.meta.url), 'utf8'));
 
-const rootDir = process.cwd();
-const publicDir = path.resolve(rootDir, 'dist', 'public');
-const backendPort = Number(process.env.PIPELINE_PORT || '8000');
-const appPort = Number(process.env.PORT || '3000');
-const backendUrl = new URL(\`http://127.0.0.1:\${backendPort}\`);
-let backendStarted = false;
-
-function contentType(filePath) {
-  switch (path.extname(filePath).toLowerCase()) {
-    case '.html':
-      return 'text/html; charset=utf-8';
-    case '.css':
-      return 'text/css; charset=utf-8';
-    case '.js':
-      return 'application/javascript; charset=utf-8';
-    case '.json':
-      return 'application/json; charset=utf-8';
-    case '.svg':
-      return 'image/svg+xml';
-    case '.png':
-      return 'image/png';
-    case '.jpg':
-    case '.jpeg':
-      return 'image/jpeg';
-    case '.webp':
-      return 'image/webp';
-    case '.ico':
-      return 'image/x-icon';
-    default:
-      return 'application/octet-stream';
-  }
+function backendBase(env) {
+  return (
+    env.PIPELINE_API_BASE ||
+    env.VITE_PIPELINE_API_BASE ||
+    env.BACKEND_API_BASE ||
+    ''
+  ).replace(/\\/+$/, '');
 }
 
-function startBackend() {
-  if (backendStarted) return;
-  const runScript = path.resolve(rootDir, 'artifacts', 'pipeline', 'run.sh');
-  if (!fs.existsSync(runScript)) {
-    console.warn('[deploy] backend run script not found, serving frontend only');
-    return;
+async function proxyToBackend(request, env) {
+  const base = backendBase(env);
+  if (!base) {
+    return new Response('Backend API base is not configured', {
+      status: 500,
+      headers: { 'content-type': 'text/plain; charset=utf-8' },
+    });
   }
 
-  backendStarted = true;
-  const child = spawn('bash', [runScript], {
-    cwd: rootDir,
-    env: { ...process.env, PORT: String(backendPort) },
-    stdio: 'inherit',
-    detached: false,
-  });
-
-  child.on('exit', (code, signal) => {
-    console.log(\`[deploy] backend exited code=\${code} signal=\${signal || ''}\`);
-  });
+  const url = new URL(request.url);
+  const target = new URL(url.pathname.replace(/^\\/(pipeline|api)/, '/pipeline') + url.search, base);
+  const headers = new Headers(request.headers);
+  headers.set('host', new URL(base).host);
+  const init = {
+    method: request.method,
+    headers,
+    redirect: 'manual',
+  };
+  if (!['GET', 'HEAD'].includes(request.method)) {
+    init.body = await request.arrayBuffer();
+  }
+  return fetch(new Request(target, init));
 }
 
-function sendFile(res, filePath) {
-  const stream = fs.createReadStream(filePath);
-  res.writeHead(200, { 'content-type': contentType(filePath) });
-  stream.on('error', () => {
-    res.writeHead(500);
-    res.end('Internal Server Error');
-  });
-  stream.pipe(res);
-}
-
-function resolveAsset(urlPath) {
-  const cleaned = urlPath === '/' ? '/index.html' : urlPath;
-  const candidate = path.join(publicDir, cleaned);
-  if (!candidate.startsWith(publicDir)) return null;
-  if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
-  return null;
-}
-
-function proxyToBackend(req, res) {
-  const upstream = http.request(
-    {
-      protocol: backendUrl.protocol,
-      hostname: backendUrl.hostname,
-      port: backendUrl.port,
-      method: req.method,
-      path: req.url,
-      headers: req.headers,
-    },
-    (upstreamRes) => {
-      res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
-      upstreamRes.pipe(res);
-    },
-  );
-
-  upstream.on('error', () => {
-    res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('Backend unavailable');
-  });
-
-  req.pipe(upstream);
-}
-
-startBackend();
-
-http
-  .createServer((req, res) => {
-    const url = new URL(req.url || '/', \`http://127.0.0.1:\${appPort}\`);
-
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
     if (url.pathname.startsWith('/pipeline') || url.pathname.startsWith('/api')) {
-      proxyToBackend(req, res);
-      return;
+      return proxyToBackend(request, env);
     }
 
-    const assetPath = resolveAsset(url.pathname);
-    if (assetPath) {
-      sendFile(res, assetPath);
-      return;
+    if (env.ASSETS?.fetch) {
+      const assetResponse = await env.ASSETS.fetch(request);
+      if (assetResponse.status !== 404) return assetResponse;
+      const fallback = new URL(request.url);
+      fallback.pathname = '/index.html';
+      return env.ASSETS.fetch(new Request(fallback, request));
     }
 
-    sendFile(res, path.join(publicDir, 'index.html'));
-  })
-  .listen(appPort, '0.0.0.0', () => {
-    console.log(\`[deploy] StoryForge Studio listening on :\${appPort}\`);
-  });
+    return new Response('Asset binding unavailable', {
+      status: 500,
+      headers: { 'content-type': 'text/plain; charset=utf-8' },
+    });
+  },
+};
 `;
 }

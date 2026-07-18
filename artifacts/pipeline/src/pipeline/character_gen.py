@@ -136,6 +136,10 @@ async def _try_qwen_image_plus(prompt: str) -> Optional[bytes]:
                     payload=payload,
                 ),
                 extra={"model": "qwen-image-plus"},
+                extra_builder=lambda result: {
+                    "model": "qwen-image-plus",
+                    "task_id": result.get("output", {}).get("task_id") or result.get("task_id") or result.get("id"),
+                },
             )
 
         image_url = _extract_image_url(data)
@@ -189,6 +193,11 @@ async def _try_qwen_image_edit_max(prompt: str, reference_image_urls: list[str])
                     payload=payload,
                 ),
                 extra={"model": "qwen-image-edit-max", "reference_count": len(reference_image_urls)},
+                extra_builder=lambda result: {
+                    "model": "qwen-image-edit-max",
+                    "reference_count": len(reference_image_urls),
+                    "task_id": result.get("output", {}).get("task_id") or result.get("task_id") or result.get("id"),
+                },
             )
 
         image_url = _extract_image_url(data)
@@ -244,6 +253,11 @@ async def _try_wan_reference_image(prompt: str, reference_image_urls: list[str])
                     payload=payload,
                 ),
                 extra={"model": QWEN_IMAGE_REF_MODEL, "reference_count": len(reference_image_urls)},
+                extra_builder=lambda result: {
+                    "model": QWEN_IMAGE_REF_MODEL,
+                    "reference_count": len(reference_image_urls),
+                    "task_id": result.get("output", {}).get("task_id") or result.get("task_id") or result.get("id"),
+                },
             )
 
         task_id = data.get("output", {}).get("task_id")

@@ -75,6 +75,7 @@ export type Scene = {
   prompt: string;
   clip_url?: string;
   image_url?: string;
+  media_url?: string;
   video_url?: string;
   exit_frame_url?: string;
   duration?: number;
@@ -107,6 +108,79 @@ export type User = {
 export type AuthResponse = {
   token: string;
   user: User;
+};
+
+export type AdminProfile = {
+  email: string;
+  role: "admin";
+};
+
+export type AdminAuthResponse = {
+  token: string;
+  admin: AdminProfile;
+};
+
+export type AdminUserSummary = {
+  id: string;
+  email: string;
+  created_at: string;
+  updated_at: string;
+  story_count: number;
+  draft_story_count: number;
+  approved_story_count: number;
+  generating_story_count: number;
+  checkpoint_story_count: number;
+  completed_story_count: number;
+  failed_story_count: number;
+  total_job_count: number;
+  completed_job_count: number;
+  failed_job_count: number;
+  last_activity_at?: string | null;
+  last_story_title?: string | null;
+  last_story_status?: string | null;
+};
+
+export type AdminStorySummary = {
+  id: string;
+  title: string;
+  status: string;
+  approval_status: string;
+  workflow_type: string;
+  workflow_version?: string | null;
+  generation_version?: string | null;
+  episode_count: number;
+  completed_episode_count: number;
+  failed_episode_count: number;
+  job_count: number;
+  failed_job_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AdminOverview = {
+  totals: Record<string, number>;
+  story_status_breakdown: { status: string; count: number }[];
+  job_status_breakdown: { status: string; count: number }[];
+  daily_activity: { day: string; count: number }[];
+  provider_costs: { total_cost: number; avg_latency_ms: number; p95_latency_ms: number };
+  provider_latency: { avg_latency_ms: number; p95_latency_ms: number };
+  top_failure_steps: { step_name: string; provider?: string; failures: number }[];
+  recent_failures: {
+    metric_kind: string;
+    step_name?: string | null;
+    provider?: string | null;
+    error?: string | null;
+    created_at: string;
+    entity_type?: string | null;
+    entity_id?: string | null;
+  }[];
+};
+
+export type AdminUserDetail = {
+  user: AdminUserSummary;
+  stories: AdminStorySummary[];
+  recent_jobs: Array<Record<string, any>>;
+  recent_activity: Array<Record<string, any>>;
 };
 
 export type GenerationJob = {
@@ -185,6 +259,13 @@ export type GalleryItem = {
   created_at: string;
 };
 
+export type UploadResponse = {
+  url: string;
+  key: string;
+  content_type: string;
+  size: number;
+};
+
 function resolvePipelineBase() {
   const explicit = import.meta.env.VITE_PIPELINE_API_BASE?.trim()?.replace(/\/+$/, "");
   if (explicit) return explicit;
@@ -251,6 +332,35 @@ const put = (body: unknown = {}) => ({
   body: JSON.stringify(body),
 });
 
+const ADMIN_AUTH_TOKEN_KEY = "storyforge_admin_auth_token";
+
+export function getAdminAuthToken() {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(ADMIN_AUTH_TOKEN_KEY);
+}
+
+export function setAdminAuthToken(token: string) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(ADMIN_AUTH_TOKEN_KEY, token);
+}
+
+export function clearAdminAuthToken() {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(ADMIN_AUTH_TOKEN_KEY);
+}
+
+async function adminReq<T>(url: string, options?: RequestInit): Promise<T> {
+  const headers = new Headers(options?.headers);
+  const token = getAdminAuthToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const res = await fetch(url, { ...options, headers });
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`API ${res.status}: ${text}`);
+  }
+  return res.json();
+}
+
 export const api = {
   register: (data: { email: string; password: string }) =>
     req<AuthResponse>(`${BASE}/auth/register`, json(data)),
@@ -270,6 +380,9 @@ export const api = {
     num_scenes?: number;
     workflow_type?: WorkflowType;
     bible_ids?: string[];
+    style_reference_urls?: string[];
+    character_reference_urls?: string[];
+    scene_reference_urls?: string[];
   }) => req<Story>(`${BASE}/stories`, json(data)),
   approveOutline: (id: string) => req<Story>(`${BASE}/stories/${id}/approve-outline`, put()),
   generateStory: (id: string) => req<GenerationJob>(`${BASE}/stories/${id}/generate`, { method: "POST", body: "{}" }),
@@ -288,6 +401,8 @@ export const api = {
   rejectScene: (id: string) => req<Scene>(`${BASE}/scenes/${id}/reject`, put()),
   lockScene: (id: string) => req<Scene>(`${BASE}/scenes/${id}/lock`, put()),
   regenerateScene: (id: string) => req<GenerationJob>(`${BASE}/scenes/${id}/regenerate`, json({})),
+  updateSceneReferences: (id: string, reference_image_urls: string[]) =>
+    req<Scene>(`${BASE}/scenes/${id}/references`, json({ reference_image_urls })),
 
   getEpisodes: (storyId: string) => req<Episode[]>(`${BASE}/episodes/story/${storyId}`),
   getStoryCheckpoints: (storyId: string) => req<GenerationCheckpoint[]>(`${BASE}/stories/${storyId}/checkpoints`),
@@ -300,4 +415,27 @@ export const api = {
   getPublicGallery: () => req<GalleryItem[]>(`${BASE}/gallery/public`),
   getJob: (jobId: string) => req<GenerationJob>(`${BASE}/jobs/${jobId}`),
   getEntityJobs: (type: string, id: string) => req<GenerationJob[]>(`${BASE}/jobs/entity/${type}/${id}`),
+  uploadImage: async (file: File) => {
+    const token = getAuthToken();
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${BASE}/uploads/image`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      body: form,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => res.statusText);
+      throw new Error(`API ${res.status}: ${text}`);
+    }
+    return res.json() as Promise<UploadResponse>;
+  },
+
+  adminLogin: (data: { email: string; password: string }) => adminReq<AdminAuthResponse>(`${BASE}/admin/login`, json(data)),
+  adminMe: () => adminReq<AdminProfile>(`${BASE}/admin/me`),
+  adminLogout: () => adminReq<{ ok: boolean }>(`${BASE}/admin/logout`, { method: "POST" }),
+  adminOverview: () => adminReq<AdminOverview>(`${BASE}/admin/overview`),
+  adminUsers: () => adminReq<AdminUserSummary[]>(`${BASE}/admin/users`),
+  adminUserDetail: (userId: string) => adminReq<AdminUserDetail>(`${BASE}/admin/users/${userId}`),
+  adminUserStories: (userId: string) => adminReq<AdminStorySummary[]>(`${BASE}/admin/users/${userId}/stories`),
 };

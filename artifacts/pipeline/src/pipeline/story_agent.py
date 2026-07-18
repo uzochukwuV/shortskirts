@@ -207,6 +207,7 @@ async def generate_episode_plan(
     num_scenes: int,
     workflow_type: str = "creator_series",
     bibles: list[dict] | None = None,
+    reference_context: dict | None = None,
 ) -> dict:
     system_prompt = WORKFLOW_SYSTEM_PROMPTS.get(
         workflow_type,
@@ -214,6 +215,19 @@ async def generate_episode_plan(
     )
 
     bible_block = _format_bibles_for_prompt(bibles or [])
+    ref_lines: list[str] = []
+    reference_context = reference_context or {}
+    for label, urls in (
+        ("style_reference_urls", reference_context.get("style_reference_urls") or []),
+        ("character_reference_urls", reference_context.get("character_reference_urls") or []),
+        ("scene_reference_urls", reference_context.get("scene_reference_urls") or []),
+    ):
+        cleaned = [u for u in urls if u]
+        if cleaned:
+            ref_lines.append(f"- {label}: {len(cleaned)} uploaded image(s)")
+    reference_block = ""
+    if ref_lines:
+        reference_block = "\n\n## USER-UPLOADED IMAGE REFERENCES\n" + "\n".join(ref_lines) + "\n"
 
     user_msg = (
         f"Brief/Prompt: {prompt}\n"
@@ -222,6 +236,7 @@ async def generate_episode_plan(
         f"Number of episodes: {num_episodes}\n"
         f"Scenes per episode: {num_scenes}\n"
         f"Workflow type: {workflow_type}\n"
+        f"{reference_block}"
         f"{bible_block}\n"
         "Generate the complete production plan as JSON."
     )

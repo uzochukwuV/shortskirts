@@ -175,6 +175,7 @@ async def run_provider_step(
     *,
     cost_fn: Optional[Callable[[Any], float]] = None,
     extra: Optional[dict[str, Any]] = None,
+    extra_builder: Optional[Callable[[Any], dict[str, Any]]] = None,
 ) -> Any:
     policy = STEP_POLICIES[policy_name]
     attempt = 0
@@ -201,6 +202,14 @@ async def run_provider_step(
                         (prompt_tokens / 1000.0) * policy.prompt_cost_per_1k
                         + (completion_tokens / 1000.0) * policy.completion_cost_per_1k
                     )
+            merged_extra = dict(extra or {})
+            if extra_builder is not None:
+                try:
+                    built_extra = extra_builder(result) or {}
+                    if isinstance(built_extra, dict):
+                        merged_extra.update(built_extra)
+                except Exception:
+                    pass
             await record_pipeline_metric(
                 metric_kind="provider",
                 status="success",
@@ -210,7 +219,7 @@ async def run_provider_step(
                 retries=attempt - 1,
                 step_name=step_name,
                 provider=policy.provider,
-                extra=extra or {},
+                extra=merged_extra,
             )
             return result
         except Exception as exc:

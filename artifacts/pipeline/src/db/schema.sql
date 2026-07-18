@@ -145,6 +145,7 @@ CREATE TABLE IF NOT EXISTS scenes (
     UNIQUE(episode_id, scene_number)
 );
 
+ALTER TABLE scenes ADD COLUMN IF NOT EXISTS image_url TEXT;
 ALTER TABLE scenes ADD COLUMN IF NOT EXISTS approval_status TEXT NOT NULL DEFAULT 'pending';
 ALTER TABLE scenes ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
 ALTER TABLE scenes ADD COLUMN IF NOT EXISTS locked BOOLEAN NOT NULL DEFAULT false;
@@ -297,6 +298,8 @@ CREATE TABLE IF NOT EXISTS pipeline_metrics (
     retries INT NOT NULL DEFAULT 0,
     step_name TEXT,
     provider TEXT,
+    provider_task_id TEXT,
+    provider_request_id TEXT,
     error TEXT,
     job_id UUID,
     entity_type TEXT,
@@ -305,6 +308,20 @@ CREATE TABLE IF NOT EXISTS pipeline_metrics (
     extra JSONB NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE pipeline_metrics ADD COLUMN IF NOT EXISTS provider_task_id TEXT;
+ALTER TABLE pipeline_metrics ADD COLUMN IF NOT EXISTS provider_request_id TEXT;
+
+CREATE TABLE IF NOT EXISTS admin_sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_sessions_token_hash ON admin_sessions(token_hash);
+CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires_at ON admin_sessions(expires_at);
 
 CREATE INDEX IF NOT EXISTS idx_pipeline_metrics_kind ON pipeline_metrics(metric_kind);
 CREATE INDEX IF NOT EXISTS idx_pipeline_metrics_job_id ON pipeline_metrics(job_id);

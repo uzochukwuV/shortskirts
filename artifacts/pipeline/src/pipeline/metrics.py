@@ -18,6 +18,8 @@ async def record_pipeline_metric(
     retries: int = 0,
     step_name: str | None = None,
     provider: str | None = None,
+    provider_task_id: str | None = None,
+    provider_request_id: str | None = None,
     error: str | None = None,
     job_id: str | None = None,
     entity_type: str | None = None,
@@ -27,11 +29,15 @@ async def record_pipeline_metric(
 ) -> None:
     ctx = get_job_context() or {}
     pool = await get_pool()
+    extra_data = dict(extra or {})
+    provider_task_id = provider_task_id or extra_data.get("task_id") or extra_data.get("provider_task_id")
+    provider_request_id = provider_request_id or extra_data.get("request_id") or extra_data.get("provider_request_id")
     await pool.execute(
         """INSERT INTO pipeline_metrics
            (metric_kind, status, duration_ms, provider_latency_ms, estimated_cost_usd,
-            retries, step_name, provider, error, job_id, entity_type, entity_id, workload, extra)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb)""",
+            retries, step_name, provider, provider_task_id, provider_request_id, error,
+            job_id, entity_type, entity_id, workload, extra)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb)""",
         metric_kind,
         status,
         duration_ms,
@@ -40,10 +46,12 @@ async def record_pipeline_metric(
         retries,
         step_name,
         provider,
+        provider_task_id,
+        provider_request_id,
         error,
         job_id or ctx.get("job_id"),
         entity_type or ctx.get("entity_type"),
         entity_id or ctx.get("entity_id"),
         workload or ctx.get("workload"),
-        json.dumps(extra or {}),
+        json.dumps(extra_data),
     )

@@ -76,6 +76,9 @@ class StoryCreate(BaseModel):
     num_scenes: int = Field(default=5, ge=3, le=10)
     workflow_type: WorkflowType = WorkflowType.creator_series
     bible_ids: list[str] = Field(default_factory=list)
+    style_reference_urls: list[str] = Field(default_factory=list)
+    character_reference_urls: list[str] = Field(default_factory=list)
+    scene_reference_urls: list[str] = Field(default_factory=list)
 
 
 class StoryResponse(BaseModel):

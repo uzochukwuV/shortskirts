@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=DM+Serif+Display&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Raleway:wght@400;500;600;700;800&display=swap');
 @import "tailwindcss";
 @import "tw-animate-css";
 @plugin "@tailwindcss/typography";
@@ -40,8 +40,8 @@
   --color-destructive-foreground: hsl(var(--destructive-foreground));
   --color-destructive-border: var(--destructive-border);
 
-  --font-sans: 'DM Sans', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-display: 'DM Serif Display', ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  --font-sans: 'Raleway', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: 'Raleway', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 
   --radius-sm: 0.625rem;
   --radius-md: 0.875rem;

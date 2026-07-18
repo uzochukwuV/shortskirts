@@ -17,6 +17,22 @@ from pipeline.versioning import (
 )
 
 
+def _workflow_refs(story: dict, key: str) -> list[str]:
+    workflow_state = story.get("workflow_state") or {}
+    if isinstance(workflow_state, str):
+        try:
+            workflow_state = json.loads(workflow_state)
+        except Exception:
+            workflow_state = {}
+    refs = workflow_state.get(key) or []
+    if isinstance(refs, str):
+        try:
+            refs = json.loads(refs)
+        except Exception:
+            refs = []
+    return [u for u in refs if u]
+
+
 async def run_character_ref_job(character_id: str, job_id: str, worker_id: str):
     pool = await get_pool()
     await update_job(pool, job_id, status="running", started_at=datetime.utcnow(), current_step="Generating new ref images")
@@ -93,6 +109,7 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
         plan = story["episode_plan"]
         if isinstance(plan, str):
             plan = json.loads(plan)
+        story_scene_refs = _workflow_refs(story, "scene_reference_urls")
 
         ep_num = episode["episode_number"]
         scene_num = scene["scene_number"]
@@ -136,6 +153,8 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
                     refs = json.loads(refs)
                 char_refs.extend(refs)
         char_refs = char_refs[:4]
+        if story_scene_refs:
+            char_refs = (char_refs + story_scene_refs)[:8]
 
         if is_narrated_image_story:
             await update_job(pool, job_id, current_step="Generating new image scene")
@@ -176,6 +195,9 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
             "image_model_version": IMAGE_MODEL_VERSION if is_narrated_image_story else None,
             "edit_model": IMAGE_EDIT_MODEL_NAME if is_narrated_image_story else None,
             "edit_model_version": IMAGE_EDIT_MODEL_VERSION if is_narrated_image_story else None,
+            "image_url": result.get("image_url"),
+            "media_url": result.get("image_url") or result.get("clip_url"),
+            "exit_frame_url": result.get("exit_frame_url"),
         }
         regen_count = (scene.get("regeneration_count") or 0) + 1
         if is_narrated_image_story:
@@ -196,18 +218,20 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
                 IMAGE_MODEL_VERSION,
                 IMAGE_EDIT_MODEL_NAME,
                 IMAGE_EDIT_MODEL_VERSION,
-                json.dumps({
-                    "story_id": str(story["id"]),
-                    "episode_id": str(episode["id"]),
-                    "scene_id": scene_id,
-                    "generation_version": story.get("generation_version", GENERATION_VERSION),
-                    "image_model": IMAGE_MODEL_NAME,
-                    "image_model_version": IMAGE_MODEL_VERSION,
-                    "edit_model": IMAGE_EDIT_MODEL_NAME,
-                    "edit_model_version": IMAGE_EDIT_MODEL_VERSION,
-                }),
-                scene_id,
-            )
+                    json.dumps({
+                        "story_id": str(story["id"]),
+                        "episode_id": str(episode["id"]),
+                        "scene_id": scene_id,
+                        "generation_version": story.get("generation_version", GENERATION_VERSION),
+                        "image_model": IMAGE_MODEL_NAME,
+                        "image_model_version": IMAGE_MODEL_VERSION,
+                        "edit_model": IMAGE_EDIT_MODEL_NAME,
+                        "edit_model_version": IMAGE_EDIT_MODEL_VERSION,
+                        "image_url": result.get("image_url"),
+                        "media_url": result.get("image_url") or result.get("clip_url"),
+                    }),
+                    scene_id,
+                )
         else:
             await pool.execute(
                 """UPDATE scenes SET clip_url=$1, exit_frame_url=$2, duration=$3,
@@ -221,14 +245,16 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
                 json.dumps(merged),
                 regen_count,
                 story.get("generation_version", GENERATION_VERSION),
-                json.dumps({
-                    "story_id": str(story["id"]),
-                    "episode_id": str(episode["id"]),
-                    "scene_id": scene_id,
-                    "generation_version": story.get("generation_version", GENERATION_VERSION),
-                }),
-                scene_id,
-            )
+                    json.dumps({
+                        "story_id": str(story["id"]),
+                        "episode_id": str(episode["id"]),
+                        "scene_id": scene_id,
+                        "generation_version": story.get("generation_version", GENERATION_VERSION),
+                        "clip_url": result.get("clip_url"),
+                        "media_url": result.get("clip_url"),
+                    }),
+                    scene_id,
+                )
         completed_scene = await pool.fetchrow("SELECT * FROM scenes WHERE id=$1", scene_id)
         if completed_scene:
             await record_scene_history(

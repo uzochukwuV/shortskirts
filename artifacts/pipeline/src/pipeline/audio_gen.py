@@ -82,6 +82,12 @@ async def synthesize_narration_audio(
                 payload=payload,
             ),
             extra={"model": model, "voice": voice, "checkpoint_id": checkpoint_id},
+            extra_builder=lambda result: {
+                "model": model,
+                "voice": voice,
+                "checkpoint_id": checkpoint_id,
+                "task_id": result.get("output", {}).get("task_id") or result.get("task_id") or result.get("id"),
+            },
         )
 
     audio_url = _extract_audio_url(data)
@@ -94,6 +100,12 @@ async def synthesize_narration_audio(
             f"audio:{model}:download",
             lambda: http.get(audio_url, follow_redirects=True),
             extra={"model": model, "voice": voice, "checkpoint_id": checkpoint_id},
+            extra_builder=lambda _result: {
+                "model": model,
+                "voice": voice,
+                "checkpoint_id": checkpoint_id,
+                "audio_source_url": audio_url,
+            },
         )
 
     key = build_key(story_id, "checkpoints", checkpoint_id, "narration.mp3")
