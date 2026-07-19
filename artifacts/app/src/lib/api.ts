@@ -376,6 +376,7 @@ export const api = {
     prompt: string;
     genre?: string;
     style?: string;
+    frame_ratio?: string;
     num_episodes?: number;
     num_scenes?: number;
     workflow_type?: WorkflowType;
