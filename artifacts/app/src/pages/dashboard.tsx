@@ -16,6 +16,7 @@ import {
   Video,
 } from "lucide-react";
 import { Layout } from "@/components/layout";
+import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -428,41 +429,22 @@ export default function Dashboard() {
   return (
     <Layout>
       <div className="bg-white">
-        <section className="border-b border-border">
-          <div className="mx-auto max-w-[1200px] px-4 py-10 md:px-6">
-            <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-              <div className="space-y-4">
-                <div className="inline-flex items-center gap-2 rounded-[9999px] border border-border bg-muted px-3 py-1 text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
-                  <FolderKanban className="h-3.5 w-3.5 text-[color:#083300]" />
-                  Studio index
-                </div>
-                <h1 className="max-w-3xl font-display text-[54px] leading-[0.88] tracking-[-0.05em] text-foreground">
-                  Production dashboard for stories that already exist in the backend.
-                </h1>
-                <p className="max-w-2xl text-[16px] leading-7 text-muted-foreground">
-                  Briefs, approvals, version history, and render state are all exposed here. Open a story to work the console.
-                </p>
-              </div>
-              <CreateProductionDialog onCreated={(id) => setLocation(`/stories/${id}`)} />
-            </div>
-
-            <div className="mt-8 grid gap-4 md:grid-cols-4">
-              {[
-                { label: "Total productions", value: metrics.total },
-                { label: "Drafts", value: metrics.drafts },
-                { label: "Active", value: metrics.active },
-                { label: "Completed", value: metrics.complete },
-              ].map((item) => (
-                <div key={item.label} className="rounded-[16px] border border-border bg-white p-4">
-                  <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">{item.label}</div>
-                  <div className="mt-2 text-[32px] font-display leading-[1] tracking-[-0.04em] text-foreground">{item.value}</div>
-                </div>
-              ))}
-            </div>
-          </div>
+        <section className="space-y-6">
+          <PageHeader
+            eyebrow="Studio index"
+            title="Production dashboard for stories that already exist in the backend."
+            description="Briefs, approvals, version history, and render state are all exposed here. Open a story to work the console."
+            actions={<CreateProductionDialog onCreated={(id) => setLocation(`/stories/${id}`)} />}
+            stats={[
+              { label: "Total productions", value: String(metrics.total), hint: "All stories in the workspace." },
+              { label: "Drafts", value: String(metrics.drafts), hint: "Awaiting approval or edits." },
+              { label: "Active", value: String(metrics.active), hint: "Currently generating." },
+              { label: "Completed", value: String(metrics.complete), hint: "Ready for review." },
+            ]}
+          />
         </section>
 
-        <section className="mx-auto grid max-w-[1200px] gap-6 px-4 py-10 md:px-6 lg:grid-cols-[1.3fr_0.7fr]">
+        <section className="mt-8 grid gap-6 lg:grid-cols-[1.3fr_0.7fr]">
           <div className="space-y-4">
             <div className="flex items-end justify-between gap-4">
               <div>

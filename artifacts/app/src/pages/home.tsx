@@ -4,6 +4,7 @@ import { Link } from "wouter";
 import { ArrowRight, ChevronLeft, ChevronRight, Clock, Play, Sparkles, Video } from "lucide-react";
 import { api, GalleryItem } from "@/lib/api";
 import { Layout } from "@/components/layout";
+import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/lib/auth";
@@ -62,22 +63,13 @@ export default function Home() {
   return (
     <Layout>
       <div className="bg-white">
-        <section className="border-b border-border">
-          <div className="mx-auto grid max-w-[1200px] gap-10 px-4 py-10 md:px-6 lg:grid-cols-[0.9fr_1.1fr] lg:items-end lg:py-14">
-            <div className="space-y-6">
-              <div className="inline-flex items-center gap-2 rounded-[9999px] border border-border bg-muted px-3 py-1.5 text-[11px] font-medium text-foreground">
-                <Sparkles className="h-3.5 w-3.5 text-[color:#083300]" />
-                Public reel from live productions
-              </div>
-              <div className="space-y-4">
-                <h1 className="max-w-2xl text-[54px] font-display leading-[0.88] tracking-[-0.05em] text-foreground">
-                  Stories, scenes, and voice-led motion in one production console.
-                </h1>
-                <p className="max-w-xl text-[16px] leading-7 text-muted-foreground">
-                  Browse finished scenes, open the studio, and keep the full workflow in one place.
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-3">
+        <section className="space-y-6">
+          <PageHeader
+            eyebrow="Public reel"
+            title="Stories, scenes, and voice-led motion in one production console."
+            description="Browse finished scenes, open the studio, and keep the full workflow in one place. The public gallery is backed by live production data."
+            actions={
+              <>
                 <Link href={isAuthenticated ? "/dashboard" : "/login"}>
                   <Button size="lg" variant="lime">
                     {isAuthenticated ? "Open studio" : "Start workspace"}
@@ -89,21 +81,12 @@ export default function Home() {
                     View plans
                   </Button>
                 </Link>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-3">
-                {[
-                  "Story planning",
-                  "Video preview rails",
-                  "Narration checkpoints",
-                ].map((item) => (
-                  <div key={item} className="rounded-[16px] border border-border bg-white px-4 py-3 text-sm text-foreground">
-                    {item}
-                  </div>
-                ))}
-              </div>
-            </div>
+              </>
+            }
+          />
 
-            <div className="rounded-[16px] border border-border bg-[color:#121212] p-3 text-white">
+          <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+            <div className="rounded-[24px] border border-border bg-[color:#121212] p-4 text-white">
               <div className="flex items-center justify-between gap-3 border-b border-white/10 px-2 pb-3">
                 <div>
                   <div className="text-[11px] uppercase tracking-[0.18em] text-white/55">Featured render</div>
@@ -137,10 +120,38 @@ export default function Home() {
                 </div>
               </div>
             </div>
+
+            <div className="grid gap-4">
+              <div className="rounded-[24px] border border-border bg-white p-5">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">What users get</div>
+                <div className="mt-3 space-y-4 text-sm leading-6 text-foreground">
+                  <div className="flex items-start gap-3">
+                    <Clock className="mt-0.5 h-4 w-4 text-[color:#083300]" />
+                    <span>Outline, approval, and generation in one flow.</span>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <Video className="mt-0.5 h-4 w-4 text-[color:#083300]" />
+                    <span>Scene boxes on top, preview on the right, audio below.</span>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <Sparkles className="mt-0.5 h-4 w-4 text-[color:#083300]" />
+                    <span>Public samples pulled from live production data.</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-[24px] border border-border bg-white p-5">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Selected sample</div>
+                <div className="mt-3 rounded-[16px] border border-border bg-muted/30 p-4">
+                  <div className="text-sm font-semibold text-foreground">{selected?.story_title || "Public gallery"}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{selected ? new Date(selected.created_at).toLocaleDateString() : "Live"}</div>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
 
-        <section className="mx-auto max-w-[1200px] px-4 py-10 md:px-6">
+        <section className="mt-6">
           <div className="flex items-end justify-between gap-4">
             <div>
               <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Generated reel</div>
@@ -174,7 +185,7 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="border-t border-border bg-muted/30">
+        <section className="mt-8 border-t border-border bg-muted/30">
           <div className="mx-auto grid max-w-[1200px] gap-6 px-4 py-12 md:px-6 lg:grid-cols-[1fr_1fr_1fr]">
             {[
               {
