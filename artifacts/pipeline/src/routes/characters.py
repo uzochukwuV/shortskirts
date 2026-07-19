@@ -1,8 +1,9 @@
 import json
 from fastapi import APIRouter, HTTPException, Depends
 from db.connection import get_pool
-from models.story import CharacterCreate, CharacterResponse, GenerationJobResponse
+from models.story import CharacterCreate, CharacterResponse, CharacterUpdate, GenerationJobResponse
 from job_queue import enqueue_job, WORKLOAD_MEDIA
+from pipeline.history import record_story_history
 from auth import get_current_user, user_id
 
 router = APIRouter(prefix="/pipeline/characters", tags=["characters"])
@@ -12,6 +13,12 @@ def _row_to_response(row) -> CharacterResponse:
     refs = row["ref_image_urls"]
     if isinstance(refs, str):
         refs = json.loads(refs)
+    scene_ids = row.get("scene_ids") or []
+    if isinstance(scene_ids, str):
+        try:
+            scene_ids = json.loads(scene_ids)
+        except Exception:
+            scene_ids = []
     return CharacterResponse(
         id=str(row["id"]),
         story_id=str(row["story_id"]),
@@ -23,6 +30,7 @@ def _row_to_response(row) -> CharacterResponse:
         ref_image_urls=refs or [],
         approval_status=row.get("approval_status", "pending"),
         locked=row.get("locked", False),
+        scene_ids=[str(scene_id) for scene_id in scene_ids],
         created_at=row["created_at"],
     )
 
@@ -35,6 +43,25 @@ async def _get_character_for_owner(pool, character_id: str, owner_id: str):
         character_id,
         owner_id,
     )
+
+
+async def _load_character_scene_ids(pool, character_id: str) -> list[str]:
+    rows = await pool.fetch(
+        "SELECT scene_id FROM scene_characters WHERE character_id=$1 ORDER BY is_primary DESC, scene_id ASC",
+        character_id,
+    )
+    return [str(r["scene_id"]) for r in rows]
+
+
+async def _attach_scene_history(pool, story_id: str, character_row, event_type: str, payload: dict | None = None):
+    story = await pool.fetchrow("SELECT * FROM stories WHERE id=$1", story_id)
+    if story:
+        await record_story_history(
+            pool,
+            story=story,
+            event_type=event_type,
+            payload=payload or {},
+        )
 
 
 @router.post("", response_model=CharacterResponse)
@@ -102,7 +129,85 @@ async def get_character(character_id: str, user=Depends(get_current_user)):
     row = await _get_character_for_owner(pool, character_id, user_id(user))
     if not row:
         raise HTTPException(status_code=404, detail="Character not found")
+    row = dict(row)
+    row["scene_ids"] = await _load_character_scene_ids(pool, character_id)
     return _row_to_response(row)
+
+
+@router.put("/{character_id}", response_model=CharacterResponse)
+async def update_character(
+    character_id: str,
+    body: CharacterUpdate,
+    user=Depends(get_current_user),
+):
+    pool = await get_pool()
+    char = await _get_character_for_owner(pool, character_id, user_id(user))
+    if not char:
+        raise HTTPException(status_code=404, detail="Character not found")
+
+    updated = await pool.fetchrow(
+        """
+        UPDATE characters
+           SET name=COALESCE($2, name),
+               description=COALESCE($3, description),
+               role=COALESCE($4, role),
+               personality=COALESCE($5, personality),
+               appearance=COALESCE($6, appearance),
+               ref_image_urls=CASE WHEN $7::jsonb IS NULL THEN ref_image_urls ELSE $7::jsonb END,
+               approval_status=COALESCE($8, approval_status),
+               locked=COALESCE($9, locked),
+               updated_at=now()
+         WHERE id=$1
+         RETURNING *
+        """,
+        character_id,
+        body.name,
+        body.description,
+        body.role,
+        body.personality,
+        body.appearance,
+        json.dumps([u for u in body.ref_image_urls if u]) if body.ref_image_urls else None,
+        body.approval_status,
+        body.locked,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Character not found")
+    await _attach_scene_history(pool, str(updated["story_id"]), updated, "character_updated", {
+        "character_id": character_id,
+    })
+    updated = dict(updated)
+    updated["scene_ids"] = await _load_character_scene_ids(pool, character_id)
+    return _row_to_response(updated)
+
+
+@router.put("/{character_id}/reject", response_model=CharacterResponse)
+async def reject_character(character_id: str, user=Depends(get_current_user)):
+    pool = await get_pool()
+    if not await _get_character_for_owner(pool, character_id, user_id(user)):
+        raise HTTPException(status_code=404, detail="Character not found")
+    row = await pool.fetchrow(
+        """UPDATE characters
+           SET approval_status='rejected', approved_at=NULL, locked=false, updated_at=now()
+           WHERE id=$1 RETURNING *""",
+        character_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Character not found")
+    await _attach_scene_history(pool, str(row["story_id"]), row, "character_rejected", {
+        "character_id": character_id,
+    })
+    row = dict(row)
+    row["scene_ids"] = await _load_character_scene_ids(pool, character_id)
+    return _row_to_response(row)
+
+
+@router.put("/{character_id}/references", response_model=CharacterResponse)
+async def update_character_references(
+    character_id: str,
+    body: CharacterUpdate,
+    user=Depends(get_current_user),
+):
+    return await update_character(character_id, body, user)
 
 
 @router.put("/{character_id}/approve", response_model=CharacterResponse)
@@ -129,6 +234,30 @@ async def lock_character(character_id: str, user=Depends(get_current_user)):
         character_id,
     )
     return _row_to_response(row)
+
+
+@router.put("/{character_id}/unlock", response_model=CharacterResponse)
+async def unlock_character(character_id: str, user=Depends(get_current_user)):
+    pool = await get_pool()
+    if not await _get_character_for_owner(pool, character_id, user_id(user)):
+        raise HTTPException(status_code=404, detail="Character not found")
+    row = await pool.fetchrow(
+        "UPDATE characters SET locked=false, updated_at=now() WHERE id=$1 RETURNING *",
+        character_id,
+    )
+    return _row_to_response(row)
+
+
+@router.delete("/{character_id}", status_code=204)
+async def delete_character(character_id: str, user=Depends(get_current_user)):
+    pool = await get_pool()
+    char = await _get_character_for_owner(pool, character_id, user_id(user))
+    if not char:
+        raise HTTPException(status_code=404, detail="Character not found")
+    if char.get("locked"):
+        raise HTTPException(status_code=409, detail="Character is locked and cannot be deleted")
+    await pool.execute("DELETE FROM characters WHERE id=$1", character_id)
+    return None
 
 
 @router.post("/{character_id}/regenerate-refs", response_model=GenerationJobResponse)

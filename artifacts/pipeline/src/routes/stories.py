@@ -20,6 +20,7 @@ def _build_story_response(row, plan_data) -> StoryResponse:
             workflow_state = None
     if workflow_state is None:
         workflow_state = {}
+    frame_ratio = workflow_state.get("frame_ratio", "16:9")
 
     if isinstance(plan_data, str):
         try:
@@ -33,6 +34,7 @@ def _build_story_response(row, plan_data) -> StoryResponse:
         prompt=row["prompt"],
         genre=row["genre"],
         style=row["style"],
+        frame_ratio=frame_ratio,
         num_episodes=row["num_episodes"],
         num_scenes=row["num_scenes"],
         status=row["status"],
@@ -83,6 +85,7 @@ async def create_story(body: StoryCreate, user=Depends(get_current_user)):
         "style_reference_urls": [u for u in body.style_reference_urls if u],
         "character_reference_urls": [u for u in body.character_reference_urls if u],
         "scene_reference_urls": [u for u in body.scene_reference_urls if u],
+        "frame_ratio": body.frame_ratio,
     }
 
     bibles = []
@@ -111,8 +114,8 @@ async def create_story(body: StoryCreate, user=Depends(get_current_user)):
             num_scenes=body.num_scenes,
             workflow_type=body.workflow_type.value,
             bibles=bibles,
-            reference_context=workflow_state,
-        )
+        reference_context=workflow_state,
+    )
 
     row = await pool.fetchrow(
         """INSERT INTO stories

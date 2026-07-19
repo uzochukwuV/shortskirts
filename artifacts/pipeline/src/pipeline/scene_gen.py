@@ -6,7 +6,9 @@ import time
 from typing import Optional
 
 from storage.b2 import upload_bytes, download_url_to_bytes, build_key
+from pipeline.character_gen import generate_image_bytes
 from pipeline.story_agent import build_scene_prompt
+from pipeline.provider_status import get_provider_status
 from pipeline.provider_policy import run_provider_step
 
 # ─── Model config ─────────────────────────────────────────────────────────────
@@ -36,15 +38,33 @@ async def generate_scene_clip(
     scene_number = scene["scene_number"]
     prompt = await build_scene_prompt(scene, story_context, previous_scene_summary, style)
 
-    # Reference image: prefer character ref, then exit frame for continuity
-    reference_image = None
-    if character_refs:
-        reference_image = character_refs[0]
-    elif previous_exit_frame_url:
-        reference_image = previous_exit_frame_url
+    provider_status = await get_provider_status()
+    wan_i2v_available = bool(provider_status.get("wan", {}).get("i2v", {}).get("available"))
+    wan_t2v_available = bool(provider_status.get("wan", {}).get("t2v", {}).get("available"))
 
-    # Try DashScope video first, fall back to AIML
-    video_url = await _generate_video(prompt, reference_image)
+    # Reference image only helps when Wan image-to-video is actually available.
+    # If i2v is blocked, we keep the continuity context in the prompt and use t2v.
+    reference_image = None
+    if wan_i2v_available:
+        if character_refs:
+            reference_image = character_refs[0]
+        elif previous_exit_frame_url:
+            reference_image = previous_exit_frame_url
+
+    seed_frame_url = None
+    if reference_image is None and wan_i2v_available:
+        seed_frame_url = await _build_seed_frame(story_id, episode_id, scene_number, prompt)
+        reference_image = seed_frame_url
+    elif not wan_i2v_available and (character_refs or previous_exit_frame_url):
+        continuity_note = "Maintain the same character identity, costume, and visual tone as the provided reference."
+        prompt = f"{prompt}\n\n{continuity_note}"
+
+    # Try DashScope video first, fall back to AIML.
+    # If Wan i2v is unavailable, we intentionally call t2v instead of forcing a broken reference path.
+    if reference_image is None and not wan_t2v_available:
+        raise RuntimeError("Wan text-to-video is unavailable and no reference frame was available for Wan image-to-video")
+
+    video_url = await _generate_video(prompt, reference_image if wan_i2v_available else None)
 
     # Download once — reuse for both B2 upload and exit frame extraction
     clip_bytes = await download_url_to_bytes(video_url)
@@ -60,8 +80,17 @@ async def generate_scene_clip(
         "exit_frame_url": exit_frame_url,
         "duration": 5.0,
         "prompt": prompt,
-        "refs_used": 1 if reference_image else 0,
+        "refs_used": 1 if (reference_image and wan_i2v_available) else 0,
+        "seed_frame_url": seed_frame_url,
     }
+
+
+async def _build_seed_frame(story_id: str, episode_id: str, scene_number: int, prompt: str) -> Optional[str]:
+    image_bytes = await generate_image_bytes(f"{prompt}, single cinematic first frame, anime style")
+    if not image_bytes:
+        return None
+    key = build_key(story_id, "episodes", episode_id, "scenes", f"scene_{scene_number}_seed.jpg")
+    return upload_bytes(image_bytes, key, "image/jpeg")
 
 
 # ─── DashScope video ──────────────────────────────────────────────────────────

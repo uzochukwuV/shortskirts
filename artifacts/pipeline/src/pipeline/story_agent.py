@@ -12,7 +12,7 @@ _aiml_client: AsyncOpenAI | None = None
 QWEN_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 AIML_BASE_URL = "https://api.aimlapi.com/v1"
 
-QWEN_LLM_MODELS = ["qwen-plus", "qwen-turbo", "qwen-max"]
+QWEN_LLM_MODELS = ["qwen-max", "qwen-plus", "qwen-turbo"]
 AIML_LLM_MODELS = ["Qwen/Qwen2.5-7B-Instruct-Turbo", "gpt-4o-mini"]
 
 
@@ -217,6 +217,7 @@ async def generate_episode_plan(
     bible_block = _format_bibles_for_prompt(bibles or [])
     ref_lines: list[str] = []
     reference_context = reference_context or {}
+    frame_ratio = reference_context.get("frame_ratio") or "16:9"
     for label, urls in (
         ("style_reference_urls", reference_context.get("style_reference_urls") or []),
         ("character_reference_urls", reference_context.get("character_reference_urls") or []),
@@ -236,6 +237,7 @@ async def generate_episode_plan(
         f"Number of episodes: {num_episodes}\n"
         f"Scenes per episode: {num_scenes}\n"
         f"Workflow type: {workflow_type}\n"
+        f"Frame ratio: {frame_ratio}\n"
         f"{reference_block}"
         f"{bible_block}\n"
         "Generate the complete production plan as JSON."
@@ -296,6 +298,11 @@ async def build_scene_prompt(
     mood = scene.get("mood", "")
     action = scene.get("action", "")
 
+    frame_ratio = (
+        scene.get("frame_ratio")
+        or _safe_story_ratio(story_context)
+        or "16:9"
+    )
     if media_kind == "image":
         media_line = (
             "Single still-image composition, clear subject separation, no motion blur, "
@@ -314,5 +321,16 @@ async def build_scene_prompt(
         f"Action: {action}." if action else "",
         f"Previous context: {previous_scene_summary}." if previous_scene_summary else "",
         f"Style: {style}, {media_line}",
+        f"Frame ratio: {frame_ratio}.",
     ]
     return " ".join(p for p in parts if p)
+
+
+def _safe_story_ratio(story_context: dict) -> str | None:
+    workflow_state = story_context.get("workflow_state") or {}
+    if isinstance(workflow_state, str):
+        try:
+            workflow_state = json.loads(workflow_state)
+        except Exception:
+            workflow_state = {}
+    return workflow_state.get("frame_ratio")

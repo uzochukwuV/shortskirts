@@ -16,6 +16,7 @@ AIML_BASE_URL = "https://api.aimlapi.com"
 # DashScope image models (primary)
 QWEN_IMAGE_MODELS = ["wanx2.1-t2i-turbo", "wanx-v1"]
 QWEN_IMAGE_REF_MODEL = "wan2.7-image-pro"
+QWEN_IMAGE_EDIT_MODEL = os.getenv("QWEN_IMAGE_EDIT_MODEL", "qwen-image-edit-plus")
 # AIML image models (fallback)
 AIML_IMAGE_MODELS = ["alibaba/wan2.7-image", "flux/schnell"]
 
@@ -166,7 +167,7 @@ async def _try_qwen_image_edit_max(prompt: str, reference_image_urls: list[str])
     endpoint = f"{QWEN_IMAGE_BASE}/services/aigc/multimodal-generation/generation"
     content = [{"image": url} for url in reference_image_urls] + [{"text": prompt}]
     payload = {
-        "model": "qwen-image-edit-max",
+        "model": QWEN_IMAGE_EDIT_MODEL,
         "input": {
             "messages": [
                 {
@@ -182,7 +183,7 @@ async def _try_qwen_image_edit_max(prompt: str, reference_image_urls: list[str])
         async with httpx.AsyncClient(timeout=120) as http:
             data = await run_provider_step(
                 "dashscope_image",
-                "image:qwen-image-edit-max",
+                f"image:{QWEN_IMAGE_EDIT_MODEL}",
                 lambda: _post_json(
                     http,
                     endpoint,
@@ -192,9 +193,9 @@ async def _try_qwen_image_edit_max(prompt: str, reference_image_urls: list[str])
                     },
                     payload=payload,
                 ),
-                extra={"model": "qwen-image-edit-max", "reference_count": len(reference_image_urls)},
+                extra={"model": QWEN_IMAGE_EDIT_MODEL, "reference_count": len(reference_image_urls)},
                 extra_builder=lambda result: {
-                    "model": "qwen-image-edit-max",
+                    "model": QWEN_IMAGE_EDIT_MODEL,
                     "reference_count": len(reference_image_urls),
                     "task_id": result.get("output", {}).get("task_id") or result.get("task_id") or result.get("id"),
                 },
@@ -202,17 +203,17 @@ async def _try_qwen_image_edit_max(prompt: str, reference_image_urls: list[str])
 
         image_url = _extract_image_url(data)
         if not image_url:
-            raise RuntimeError(f"qwen-image-edit-max succeeded but no image URL: {data}")
+            raise RuntimeError(f"{QWEN_IMAGE_EDIT_MODEL} succeeded but no image URL: {data}")
         async with httpx.AsyncClient(timeout=60) as http:
             img_r = await run_provider_step(
                 "dashscope_image",
-                "image:qwen-image-edit-max:download",
+                f"image:{QWEN_IMAGE_EDIT_MODEL}:download",
                 lambda: http.get(image_url, follow_redirects=True),
-                extra={"model": "qwen-image-edit-max"},
+                extra={"model": QWEN_IMAGE_EDIT_MODEL},
             )
             return img_r.content
     except Exception as e:
-        print(f"[character_gen] qwen-image-edit-max failed: {str(e)[:120]}")
+        print(f"[character_gen] {QWEN_IMAGE_EDIT_MODEL} failed: {str(e)[:120]}")
         return None
 
 

@@ -1,13 +1,22 @@
 import json
+import os
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
 from auth import get_current_user, user_id
 from db.connection import get_pool
 from models.story import GenerationCheckpointResponse, HistoryEntryResponse
-from job_queue import enqueue_job, WORKLOAD_STORY
+from job_queue import enqueue_job, WORKLOAD_AUDIO, WORKLOAD_STORY
 from pipeline.history import record_checkpoint_history, record_story_history
+from pipeline.audio_gen import NARRATION_AUDIO_LANGUAGE, NARRATION_AUDIO_MODEL, NARRATION_AUDIO_VOICE
 
 router = APIRouter(prefix="/pipeline/stories", tags=["checkpoints"])
+narration_router = APIRouter(prefix="/pipeline/narration", tags=["narration"])
+
+
+class CheckpointAudioRegenerateRequest(BaseModel):
+    narration_model: str | None = None
+    narration_voice: str | None = None
 
 
 def _row_to_checkpoint(row) -> GenerationCheckpointResponse:
@@ -74,6 +83,47 @@ def _history_row_to_response(row) -> HistoryEntryResponse:
     )
 
 
+async def _load_checkpoint_scenes(pool, story_id: str, checkpoint_row) -> list[dict]:
+    rows = await pool.fetch(
+        """SELECT sc.*, e.episode_number
+           FROM scenes sc
+           JOIN episodes e ON e.id = sc.episode_id
+           WHERE e.story_id=$1
+             AND (e.episode_number > $2 OR (e.episode_number = $2 AND sc.scene_number >= $3))
+             AND (e.episode_number < $4 OR (e.episode_number = $4 AND sc.scene_number <= $5))
+           ORDER BY e.episode_number ASC, sc.scene_number ASC""",
+        story_id,
+        checkpoint_row["start_episode_number"],
+        checkpoint_row["start_scene_number"],
+        checkpoint_row["end_episode_number"],
+        checkpoint_row["end_scene_number"],
+    )
+    scenes: list[dict] = []
+    for row in rows:
+        meta = row.get("generation_metadata")
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except Exception:
+                meta = {}
+        meta = meta or {}
+        scenes.append({
+            "scene_number": row["scene_number"],
+            "title": meta.get("title") or f"Scene {row['scene_number']}",
+            "description": meta.get("description", row.get("prompt", "")),
+            "narration": meta.get("narration") or meta.get("description") or row.get("prompt", ""),
+        })
+    return scenes
+
+
+def _available_narration_voices() -> list[dict]:
+    raw = (os.getenv("NARRATION_AUDIO_VOICES") or "").strip()
+    voices = [v.strip() for v in raw.split(",") if v.strip()]
+    if not voices:
+        voices = [NARRATION_AUDIO_VOICE]
+    return [{"id": voice, "label": voice.replace("_", " ").title()} for voice in voices]
+
+
 async def _checkpoint_belongs_to_owner(pool, checkpoint_id: str, owner_id: str) -> bool:
     return bool(await pool.fetchval(
         """SELECT 1 FROM story_generation_checkpoints c
@@ -82,6 +132,16 @@ async def _checkpoint_belongs_to_owner(pool, checkpoint_id: str, owner_id: str) 
         checkpoint_id,
         owner_id,
     ))
+
+
+@narration_router.get("/voices")
+async def list_narration_voices():
+    return {
+        "model": NARRATION_AUDIO_MODEL,
+        "language": NARRATION_AUDIO_LANGUAGE,
+        "default_voice": NARRATION_AUDIO_VOICE,
+        "voices": _available_narration_voices(),
+    }
 
 
 @router.get("/{story_id}/checkpoints", response_model=list[GenerationCheckpointResponse])
@@ -179,3 +239,78 @@ async def get_checkpoint_history(story_id: str, checkpoint_id: str, user=Depends
         checkpoint_id,
     )
     return [_history_row_to_response(row) for row in rows]
+
+
+@router.post("/{story_id}/checkpoints/{checkpoint_id}/audio/regenerate", response_model=GenerationCheckpointResponse)
+async def regenerate_checkpoint_audio(
+    story_id: str,
+    checkpoint_id: str,
+    body: CheckpointAudioRegenerateRequest,
+    user=Depends(get_current_user),
+):
+    pool = await get_pool()
+    checkpoint = await pool.fetchrow(
+        """SELECT c.*
+           FROM story_generation_checkpoints c
+           JOIN stories s ON s.id = c.story_id
+           WHERE c.id=$1 AND c.story_id=$2 AND s.owner_id=$3""",
+        checkpoint_id,
+        story_id,
+        user_id(user),
+    )
+    if not checkpoint:
+        raise HTTPException(status_code=404, detail="Checkpoint not found")
+    if checkpoint.get("audio_status") == "running":
+        raise HTTPException(status_code=409, detail="Checkpoint audio is already processing")
+
+    scenes = await _load_checkpoint_scenes(pool, story_id, checkpoint)
+    if not scenes:
+        raise HTTPException(status_code=404, detail="No scenes found for checkpoint")
+
+    narration_model = body.narration_model or checkpoint.get("narration_model") or NARRATION_AUDIO_MODEL
+    narration_voice = body.narration_voice or checkpoint.get("narration_voice") or NARRATION_AUDIO_VOICE
+
+    job_row = await pool.fetchrow(
+        """INSERT INTO generation_jobs
+           (entity_type, entity_id, status, total_steps, current_step, job_type, result)
+           VALUES ('story', $1, 'pending', 1, 'Queued narration audio', 'checkpoint_audio', $2::jsonb)
+           RETURNING *""",
+        story_id,
+        json.dumps({
+            "story_id": story_id,
+            "checkpoint_id": checkpoint_id,
+            "narration_model": narration_model,
+            "narration_voice": narration_voice,
+        }),
+    )
+    audio_job_id = str(job_row["id"])
+
+    await pool.execute(
+        """UPDATE story_generation_checkpoints
+           SET audio_job_id=$2, audio_status='pending', narration_model=$3, narration_voice=$4,
+               updated_at=now()
+           WHERE id=$1""",
+        checkpoint_id,
+        audio_job_id,
+        narration_model,
+        narration_voice,
+    )
+    refreshed = await pool.fetchrow("SELECT * FROM story_generation_checkpoints WHERE id=$1", checkpoint_id)
+    if refreshed:
+        story = await pool.fetchrow("SELECT * FROM stories WHERE id=$1", story_id)
+        if story:
+            await record_checkpoint_history(
+                pool,
+                story=story,
+                checkpoint=refreshed,
+                event_type="checkpoint_audio_queued",
+                source_job_id=audio_job_id,
+                payload={
+                    "audio_status": refreshed.get("audio_status"),
+                    "narration_model": narration_model,
+                    "narration_voice": narration_voice,
+                },
+            )
+
+    await enqueue_job(audio_job_id, workload=WORKLOAD_AUDIO)
+    return _row_to_checkpoint(await pool.fetchrow("SELECT * FROM story_generation_checkpoints WHERE id=$1", checkpoint_id))

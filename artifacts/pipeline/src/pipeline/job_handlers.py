@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 
 from db.connection import get_pool
-from pipeline.history import record_checkpoint_history, record_scene_history
+from pipeline.history import record_checkpoint_history, record_scene_history, record_story_history
 from pipeline.character_gen import generate_character_references, get_character_embedding
 from pipeline.audio_gen import synthesize_narration_audio
 from pipeline.job_runtime import update_job
@@ -31,6 +31,33 @@ def _workflow_refs(story: dict, key: str) -> list[str]:
         except Exception:
             refs = []
     return [u for u in refs if u]
+
+
+async def _sync_scene_characters(pool, scene_id: str, story_id: str, character_names: list[str]) -> None:
+    names = [name for name in character_names if name]
+    if not names:
+        await pool.execute("DELETE FROM scene_characters WHERE scene_id=$1", scene_id)
+        return
+
+    rows = await pool.fetch(
+        """SELECT id, name
+           FROM characters
+           WHERE story_id=$1 AND name = ANY($2::text[])""",
+        story_id,
+        names,
+    )
+    name_to_id = {row["name"]: str(row["id"]) for row in rows}
+    character_ids = [name_to_id[name] for name in names if name in name_to_id]
+
+    await pool.execute("DELETE FROM scene_characters WHERE scene_id=$1", scene_id)
+    for index, character_id in enumerate(character_ids):
+        await pool.execute(
+            """INSERT INTO scene_characters (scene_id, character_id, is_primary)
+               VALUES ($1, $2, $3)""",
+            scene_id,
+            character_id,
+            index == 0,
+        )
 
 
 async def run_character_ref_job(character_id: str, job_id: str, worker_id: str):
@@ -156,6 +183,13 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
         if story_scene_refs:
             char_refs = (char_refs + story_scene_refs)[:8]
 
+        await _sync_scene_characters(
+            pool,
+            str(scene_id),
+            str(story["id"]),
+            [name for name in scene_plan.get("characters_present", []) if name],
+        )
+
         if is_narrated_image_story:
             await update_job(pool, job_id, current_step="Generating new image scene")
             result = await generate_narrated_scene_image(
@@ -201,6 +235,18 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
         }
         regen_count = (scene.get("regeneration_count") or 0) + 1
         if is_narrated_image_story:
+            scene_state = {
+                "story_id": str(story["id"]),
+                "episode_id": str(episode["id"]),
+                "scene_id": scene_id,
+                "generation_version": story.get("generation_version", GENERATION_VERSION),
+                "image_model": IMAGE_MODEL_NAME,
+                "image_model_version": IMAGE_MODEL_VERSION,
+                "edit_model": IMAGE_EDIT_MODEL_NAME,
+                "edit_model_version": IMAGE_EDIT_MODEL_VERSION,
+                "image_url": result.get("image_url"),
+                "media_url": result.get("image_url") or result.get("clip_url"),
+            }
             await pool.execute(
                 """UPDATE scenes SET image_url=$1, clip_url=NULL, exit_frame_url=$2, duration=$3,
                    status='completed', approval_status='pending',
@@ -218,21 +264,18 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
                 IMAGE_MODEL_VERSION,
                 IMAGE_EDIT_MODEL_NAME,
                 IMAGE_EDIT_MODEL_VERSION,
-                    json.dumps({
-                        "story_id": str(story["id"]),
-                        "episode_id": str(episode["id"]),
-                        "scene_id": scene_id,
-                        "generation_version": story.get("generation_version", GENERATION_VERSION),
-                        "image_model": IMAGE_MODEL_NAME,
-                        "image_model_version": IMAGE_MODEL_VERSION,
-                        "edit_model": IMAGE_EDIT_MODEL_NAME,
-                        "edit_model_version": IMAGE_EDIT_MODEL_VERSION,
-                        "image_url": result.get("image_url"),
-                        "media_url": result.get("image_url") or result.get("clip_url"),
-                    }),
-                    scene_id,
-                )
+                json.dumps(scene_state),
+                scene_id,
+            )
         else:
+            scene_state = {
+                "story_id": str(story["id"]),
+                "episode_id": str(episode["id"]),
+                "scene_id": scene_id,
+                "generation_version": story.get("generation_version", GENERATION_VERSION),
+                "clip_url": result.get("clip_url"),
+                "media_url": result.get("clip_url"),
+            }
             await pool.execute(
                 """UPDATE scenes SET clip_url=$1, exit_frame_url=$2, duration=$3,
                    status='completed', approval_status='pending',
@@ -245,16 +288,9 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
                 json.dumps(merged),
                 regen_count,
                 story.get("generation_version", GENERATION_VERSION),
-                    json.dumps({
-                        "story_id": str(story["id"]),
-                        "episode_id": str(episode["id"]),
-                        "scene_id": scene_id,
-                        "generation_version": story.get("generation_version", GENERATION_VERSION),
-                        "clip_url": result.get("clip_url"),
-                        "media_url": result.get("clip_url"),
-                    }),
-                    scene_id,
-                )
+                json.dumps(scene_state),
+                scene_id,
+            )
         completed_scene = await pool.fetchrow("SELECT * FROM scenes WHERE id=$1", scene_id)
         if completed_scene:
             await record_scene_history(

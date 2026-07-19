@@ -9,7 +9,8 @@ from routes.characters import router as characters_router
 from routes.episodes   import router as episodes_router
 from routes.scenes     import router as scenes_router
 from routes.gallery    import router as gallery_router
-from routes.checkpoints import router as checkpoints_router
+from routes.checkpoints import router as checkpoints_router, narration_router
+from routes.providers  import router as providers_router
 from routes.bibles     import router as bibles_router
 from routes.uploads    import router as uploads_router
 from routes.jobs       import router as jobs_router
@@ -46,6 +47,8 @@ app.include_router(episodes_router)
 app.include_router(scenes_router)
 app.include_router(gallery_router)
 app.include_router(checkpoints_router)
+app.include_router(narration_router)
+app.include_router(providers_router)
 app.include_router(bibles_router)
 app.include_router(uploads_router)
 app.include_router(jobs_router)
@@ -78,8 +81,15 @@ async def root():
                 "POST   /pipeline/stories/{id}/generate",
                 "GET    /pipeline/stories/{story_id}/checkpoints",
                 "PUT    /pipeline/stories/{story_id}/checkpoints/{checkpoint_id}/approve",
+                "POST   /pipeline/stories/{story_id}/checkpoints/{checkpoint_id}/audio/regenerate",
                 "GET    /pipeline/stories/{story_id}/history",
                 "GET    /pipeline/stories/{story_id}/checkpoints/{checkpoint_id}/history",
+            ],
+            "narration": [
+                "GET    /pipeline/narration/voices",
+            ],
+            "providers": [
+                "GET    /pipeline/providers/status",
             ],
             "bibles": [
                 "POST   /pipeline/bibles",
@@ -117,6 +127,8 @@ async def root():
             "jobs": [
                 "GET    /pipeline/jobs/{id}",
                 "GET    /pipeline/jobs/entity/{type}/{entity_id}",
+                "POST   /pipeline/jobs/{id}/cancel",
+                "POST   /pipeline/jobs/{id}/retry",
             ],
         },
     }

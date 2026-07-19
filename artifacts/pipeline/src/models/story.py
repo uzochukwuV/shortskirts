@@ -44,6 +44,7 @@ class JobStatus(str, Enum):
     running   = "running"
     completed = "completed"
     failed    = "failed"
+    canceled  = "canceled"
 
 
 # ─── Bibles ───────────────────────────────────────────────────────────────────
@@ -72,6 +73,7 @@ class StoryCreate(BaseModel):
     prompt: str
     genre: str = "action"
     style: str = "anime"
+    frame_ratio: str = "16:9"
     num_episodes: int = Field(default=1, ge=1, le=5)
     num_scenes: int = Field(default=5, ge=3, le=10)
     workflow_type: WorkflowType = WorkflowType.creator_series
@@ -87,6 +89,7 @@ class StoryResponse(BaseModel):
     prompt: str
     genre: str
     style: str
+    frame_ratio: str = "16:9"
     num_episodes: int
     num_scenes: int
     status: StoryStatus
@@ -111,6 +114,65 @@ class CharacterCreate(BaseModel):
     appearance: str = ""
 
 
+class CharacterUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    role: Optional[str] = None
+    personality: Optional[str] = None
+    appearance: Optional[str] = None
+    ref_image_urls: Optional[list[str]] = None
+    approval_status: Optional[str] = None
+    locked: Optional[bool] = None
+
+
+class SceneCreate(BaseModel):
+    episode_id: str
+    scene_number: int
+    prompt: str
+    title: Optional[str] = None
+    description: Optional[str] = None
+    visual_prompt: Optional[str] = None
+    mood: Optional[str] = None
+    location: Optional[str] = None
+    action: Optional[str] = None
+    narration: Optional[str] = None
+    duration: Optional[float] = None
+    media_kind: str = "video"
+    frame_ratio: str = "16:9"
+    character_ids: list[str] = Field(default_factory=list)
+    reference_image_urls: list[str] = Field(default_factory=list)
+    generate: bool = False
+
+
+class SceneUpdate(BaseModel):
+    scene_number: Optional[int] = None
+    prompt: Optional[str] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    visual_prompt: Optional[str] = None
+    mood: Optional[str] = None
+    location: Optional[str] = None
+    action: Optional[str] = None
+    narration: Optional[str] = None
+    duration: Optional[float] = None
+    media_kind: Optional[str] = None
+    frame_ratio: Optional[str] = None
+    character_ids: Optional[list[str]] = None
+    primary_character_ids: Optional[list[str]] = None
+    reference_image_urls: Optional[list[str]] = None
+    approval_status: Optional[str] = None
+    locked: Optional[bool] = None
+
+
+class SceneCharactersUpdate(BaseModel):
+    character_ids: list[str] = Field(default_factory=list)
+    primary_character_ids: list[str] = Field(default_factory=list)
+
+
+class SceneReorderRequest(BaseModel):
+    new_scene_number: int = Field(ge=1)
+
+
 class CharacterResponse(BaseModel):
     id: str
     story_id: str
@@ -124,6 +186,7 @@ class CharacterResponse(BaseModel):
     embedding: Optional[list[float]] = None
     approval_status: str = "pending"
     locked: bool = False
+    scene_ids: list[str] = []
     created_at: datetime
 
 
@@ -149,6 +212,8 @@ class SceneResponse(BaseModel):
     edit_model_version: Optional[str] = None
     source_scene_id: Optional[str] = None
     state_snapshot: Optional[dict] = None
+    character_ids: list[str] = []
+    primary_character_ids: list[str] = []
     created_at: datetime
 
     # Fields from generation_metadata
@@ -159,6 +224,7 @@ class SceneResponse(BaseModel):
     location: Optional[str] = None
     narration: Optional[str] = None
     media_kind: Optional[str] = None
+    frame_ratio: Optional[str] = None
 
     @computed_field
     @property

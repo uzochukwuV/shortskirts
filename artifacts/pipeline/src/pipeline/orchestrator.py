@@ -47,6 +47,33 @@ def _workflow_refs(story: dict, key: str) -> list[str]:
     return [u for u in refs if u]
 
 
+async def _sync_scene_characters(pool, scene_id: str, story_id: str, character_names: list[str]) -> None:
+    names = [name for name in character_names if name]
+    if not names:
+        await pool.execute("DELETE FROM scene_characters WHERE scene_id=$1", scene_id)
+        return
+
+    rows = await pool.fetch(
+        """SELECT id, name
+           FROM characters
+           WHERE story_id=$1 AND name = ANY($2::text[])""",
+        story_id,
+        names,
+    )
+    name_to_id = {row["name"]: str(row["id"]) for row in rows}
+    character_ids = [name_to_id[name] for name in names if name in name_to_id]
+
+    await pool.execute("DELETE FROM scene_characters WHERE scene_id=$1", scene_id)
+    for index, character_id in enumerate(character_ids):
+        await pool.execute(
+            """INSERT INTO scene_characters (scene_id, character_id, is_primary)
+               VALUES ($1, $2, $3)""",
+            scene_id,
+            character_id,
+            index == 0,
+        )
+
+
 def _flatten_scene_sequence(plan: dict) -> list[tuple[dict, dict]]:
     sequence: list[tuple[dict, dict]] = []
     for ep_plan in plan.get("episodes", []):
@@ -419,6 +446,13 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
                             "scene_number": scene_num,
                         },
                     )
+
+            await _sync_scene_characters(
+                pool,
+                scene_id,
+                story_id,
+                [name for name in scene_plan.get("characters_present", []) if name],
+            )
 
             chars_in_scene = scene_plan.get("characters_present", [])
             char_refs = []

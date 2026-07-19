@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from db.connection import get_pool
 from models.story import GenerationJobResponse
 from auth import get_current_user, user_id
+from job_queue import enqueue_job, job_workload
 
 router = APIRouter(prefix="/pipeline/jobs", tags=["jobs"])
 
@@ -138,3 +139,55 @@ async def list_job_metrics(job_id: str, user=Depends(get_current_user)):
         job_id,
     )
     return [_metric_row(row) for row in rows]
+
+
+@router.post("/{job_id}/cancel", response_model=GenerationJobResponse)
+async def cancel_job(job_id: str, user=Depends(get_current_user)):
+    pool = await get_pool()
+    row = await pool.fetchrow("SELECT * FROM generation_jobs WHERE id=$1", job_id)
+    if not row or not await _job_belongs_to_owner(pool, row, user_id(user)):
+        raise HTTPException(status_code=404, detail="Job not found")
+    if row["status"] in {"completed", "failed", "canceled"}:
+        return _job_response(row)
+
+    updated = await pool.fetchrow(
+        """UPDATE generation_jobs
+           SET status='canceled',
+               error='Canceled by user',
+               completed_at=COALESCE(completed_at, now()),
+               worker_id=NULL,
+               lease_expires_at=NULL,
+               updated_at=now()
+           WHERE id=$1
+           RETURNING *""",
+        job_id,
+    )
+    return _job_response(updated)
+
+
+@router.post("/{job_id}/retry", response_model=GenerationJobResponse)
+async def retry_job(job_id: str, user=Depends(get_current_user)):
+    pool = await get_pool()
+    row = await pool.fetchrow("SELECT * FROM generation_jobs WHERE id=$1", job_id)
+    if not row or not await _job_belongs_to_owner(pool, row, user_id(user)):
+        raise HTTPException(status_code=404, detail="Job not found")
+    if row["status"] == "running":
+        raise HTTPException(status_code=409, detail="Job is still running")
+
+    updated = await pool.fetchrow(
+        """UPDATE generation_jobs
+           SET status='pending',
+               error=NULL,
+               completed_at=NULL,
+               worker_id=NULL,
+               leased_at=NULL,
+               lease_expires_at=NULL,
+               last_heartbeat_at=now(),
+               current_step='Retry queued',
+               updated_at=now()
+           WHERE id=$1
+           RETURNING *""",
+        job_id,
+    )
+    await enqueue_job(job_id, workload=job_workload(updated["entity_type"], updated.get("job_type")))
+    return _job_response(updated)
