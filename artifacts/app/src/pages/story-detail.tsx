@@ -46,6 +46,7 @@ import { api, Character, Episode, GenerationJob, HistoryEntry, Scene, Story } fr
 import { ConsoleStage } from "@/components/story-console/console-stage";
 import { ConsoleInspector } from "@/components/story-console/console-inspector";
 import { ConsoleBottomTray } from "@/components/story-console/console-bottom-tray";
+import { buildWorkspaceActivity } from "@/components/story-console/story-console-utils";
 
 type ChatMessage = { role: "assistant" | "user"; text: string };
 type RefAsset = { url: string; name: string };
@@ -531,25 +532,41 @@ export default function StoryDetail() {
     : expectedScenes
       ? Math.min(100, Math.round((completedScenes / expectedScenes) * 100))
       : 0;
+  const activityItems = useMemo(
+    () =>
+      buildWorkspaceActivity({
+        story,
+        episodes,
+        allScenes,
+        characters,
+        storyHistory,
+        sceneHistory,
+        checkpoints,
+        latestStoryJob,
+        selectedScene,
+      }),
+    [story, episodes, allScenes, characters, storyHistory, sceneHistory, checkpoints, latestStoryJob, selectedScene],
+  );
   const zoomScale = Math.max(0.62, Math.min(1.1, canvasZoom[0] / 100));
 
   return (
-    <div className="h-screen overflow-hidden bg-[#f2f1f0] text-[#0c0a09]">
-      <header className="flex h-14 items-center gap-3 border-b border-[#e6e6e7] bg-white px-4">
+    <div className="min-h-[calc(100vh-120px)] overflow-hidden bg-background text-foreground">
+      <header className="flex h-14 items-center gap-3 border-b border-border bg-white px-4">
         <Link href="/dashboard">
           <Button variant="ghost" size="sm" className="px-2">
             <ArrowLeft className="h-4 w-4" />
           </Button>
         </Link>
         <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-[#96ff1a] text-[#083300]">
+          <div className="flex h-9 w-9 items-center justify-center rounded-[12px] bg-[color:#96ff1a] text-[color:#083300]">
             <Sparkles className="h-4 w-4" />
           </div>
           <div className="min-w-0">
             <div className="truncate text-sm font-extrabold">{story.title}</div>
-            <div className="text-[11px] text-[#71737a]">{story.workflow_type}</div>
+            <div className="text-[11px] text-muted-foreground">{story.workflow_type}</div>
           </div>
           <Badge className={statusTone(story.status)}>{story.status}</Badge>
+          <Badge className="border-border bg-muted text-foreground">{progressValue}%</Badge>
         </div>
         <div className="ml-auto flex items-center gap-2">
           {story.status === "draft" && (
@@ -573,69 +590,45 @@ export default function StoryDetail() {
         </div>
       </header>
 
-      <div className="grid h-[calc(100vh-56px)] grid-cols-[260px_minmax(0,1fr)_360px] grid-rows-[minmax(0,1fr)_240px] gap-4 p-4">
-        <aside className="row-span-2 overflow-hidden rounded-[24px] border border-[#e6e6e7] bg-white">
-          <div className="flex items-center justify-between border-b border-[#e6e6e7] px-4 py-3">
-            <div>
-              <div className="text-[11px] font-bold uppercase text-[#71737a]">Workspace</div>
-              <div className="mt-1 text-sm font-extrabold text-[#0c0a09]">Production map</div>
-            </div>
-            <Badge className="border-[#e6e6e7] bg-[#f2f1f0] text-[#323232]">{allScenes.length}/{expectedScenes || "-"}</Badge>
-          </div>
-          <div className="h-[calc(100%-56px)] overflow-y-auto p-4">
-            <div className="rounded-[18px] border border-[#e6e6e7] bg-[#f8f8f8] p-4">
-              <div className="text-[11px] font-bold uppercase text-[#71737a]">Production docs</div>
-              <div className="mt-3 space-y-2">
-                <button type="button" onClick={() => setTab("outline")} className="flex w-full items-center justify-between rounded-[12px] bg-white px-3 py-2 text-left text-sm font-semibold hover:bg-[#e6ffc8]">
-                  <span className="flex items-center gap-2"><FileText className="h-4 w-4" /> Outline</span>
-                  <ChevronRight className="h-4 w-4 text-[#71737a]" />
-                </button>
-                <button type="button" onClick={() => setTab("script")} className="flex w-full items-center justify-between rounded-[12px] bg-white px-3 py-2 text-left text-sm font-semibold hover:bg-[#e6ffc8]">
-                  <span className="flex items-center gap-2"><Clapperboard className="h-4 w-4" /> Story text</span>
-                  <ChevronRight className="h-4 w-4 text-[#71737a]" />
-                </button>
-                <button type="button" onClick={() => setTab("history")} className="flex w-full items-center justify-between rounded-[12px] bg-white px-3 py-2 text-left text-sm font-semibold hover:bg-[#e6ffc8]">
-                  <span className="flex items-center gap-2"><History className="h-4 w-4" /> History</span>
-                  <span className="text-xs text-[#71737a]">{storyHistory.length}</span>
-                </button>
+      <div className="grid gap-4 p-4 xl:grid-cols-[320px_minmax(0,1fr)_340px]">
+        <aside className="space-y-4">
+          <section className="rounded-[24px] border border-border bg-white p-4 shadow-[0_18px_40px_rgba(0,0,0,0.03)]">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Workspace</div>
+                <div className="mt-1 text-sm font-semibold text-foreground">Production map</div>
               </div>
+              <Badge className="border-border bg-muted text-foreground">{allScenes.length}/{expectedScenes || "-"}</Badge>
             </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+              <button type="button" onClick={() => setTab("outline")} className="flex items-center justify-between rounded-[14px] border border-border bg-muted/30 px-3 py-2 text-left text-sm font-medium text-foreground hover:bg-muted/60">
+                <span className="flex items-center gap-2"><FileText className="h-4 w-4" /> Outline</span>
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              </button>
+              <button type="button" onClick={() => setTab("script")} className="flex items-center justify-between rounded-[14px] border border-border bg-muted/30 px-3 py-2 text-left text-sm font-medium text-foreground hover:bg-muted/60">
+                <span className="flex items-center gap-2"><Clapperboard className="h-4 w-4" /> Story text</span>
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              </button>
+              <button type="button" onClick={() => setTab("history")} className="flex items-center justify-between rounded-[14px] border border-border bg-muted/30 px-3 py-2 text-left text-sm font-medium text-foreground hover:bg-muted/60">
+                <span className="flex items-center gap-2"><History className="h-4 w-4" /> History</span>
+                <span className="text-xs text-muted-foreground">{storyHistory.length}</span>
+              </button>
+              <button type="button" onClick={() => setInspectorMode("scene")} className="flex items-center justify-between rounded-[14px] border border-border bg-muted/30 px-3 py-2 text-left text-sm font-medium text-foreground hover:bg-muted/60">
+                <span className="flex items-center gap-2"><Layers3 className="h-4 w-4" /> Scene controls</span>
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              </button>
+            </div>
+          </section>
 
-            <div className="mt-4 space-y-3">
-              <div className="flex items-center justify-between text-[11px] font-bold uppercase text-[#71737a]">
-                <span>Episodes</span>
-                <span>{episodes.length}</span>
-              </div>
-              {episodes.map((episode) => (
-                <div key={episode.id} className="rounded-[18px] border border-[#e6e6e7] bg-white p-3">
-                  <div className="flex items-center gap-2 text-xs font-extrabold text-[#0c0a09]">
-                    <Layers3 className="h-4 w-4" />
-                    E{episode.episode_number}
-                  </div>
-                  <div className="mt-1 truncate text-sm text-[#323232]">{episode.title}</div>
-                  <div className="mt-3 space-y-1">
-                    {(episode.scenes || []).map((scene) => (
-                      <button
-                        key={scene.id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedSceneId(scene.id);
-                          setTab("design");
-                        }}
-                        className={`flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-xs transition ${
-                          selectedScene?.id === scene.id ? "bg-[#e6ffc8] text-[#083300]" : "bg-[#f8f8f8] hover:bg-[#f2f1f0]"
-                        }`}
-                      >
-                        <Film className="h-4 w-4 shrink-0" />
-                        <span className="min-w-0 flex-1 truncate">S{scene.scene_number} {scene.title || "Scene"}</span>
-                        <span className="text-[10px] text-[#71737a]">{scene.status}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+          <ConsoleBottomTray
+            latestJobLabel={latestStoryJob?.current_step || latestStoryJob?.status || null}
+            messages={messages}
+            prompt={prompt}
+            setPrompt={setPrompt}
+            onSubmit={onSubmitPrompt}
+            latestAudioCheckpoint={latestAudioCheckpoint}
+            activityItems={activityItems}
+          />
         </aside>
 
         <ConsoleStage
@@ -689,17 +682,6 @@ export default function StoryDetail() {
           approvedScenes={approvedScenes}
           sceneRefUploading={sceneRefUploading}
         />
-
-        <div className="col-span-2 col-start-2 row-start-2">
-          <ConsoleBottomTray
-            latestJobLabel={latestStoryJob?.current_step || latestStoryJob?.status || null}
-            messages={messages}
-            prompt={prompt}
-            setPrompt={setPrompt}
-            onSubmit={onSubmitPrompt}
-            latestAudioCheckpoint={latestAudioCheckpoint}
-          />
-        </div>
       </div>
 
       <Dialog open={tab !== "design"} onOpenChange={(open) => !open && setTab("design")}>

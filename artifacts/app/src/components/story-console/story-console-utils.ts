@@ -45,3 +45,105 @@ export type StoryConsoleData = {
   checkpoints: any[];
   latestStoryJob: GenerationJob | null;
 };
+
+export type WorkspaceActivityTone = "neutral" | "success" | "warning" | "danger" | "accent";
+
+export type WorkspaceActivity = {
+  title: string;
+  detail: string;
+  tone: WorkspaceActivityTone;
+  timestamp?: string | null;
+};
+
+function minutesSince(value?: string | null) {
+  if (!value) return null;
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return null;
+  return Math.max(0, Math.round((Date.now() - dt.getTime()) / 60000));
+}
+
+function describeScene(scene: Scene) {
+  const title = scene.title || `Scene ${scene.scene_number}`;
+  const state = scene.status || scene.approval_status || "pending";
+  return { title, state };
+}
+
+export function buildWorkspaceActivity(data: StoryConsoleData & { selectedScene?: Scene | null }): WorkspaceActivity[] {
+  const items: WorkspaceActivity[] = [];
+  const latestJob = data.latestStoryJob;
+  const selectedScene = data.selectedScene ?? null;
+  const generatingScenes = data.allScenes.filter((scene) => scene.status === "generating" || scene.status === "checkpoint_review");
+  const completedScenes = data.allScenes.filter((scene) => scene.status === "completed" || scene.status === "ready");
+
+  if (latestJob) {
+    const age = minutesSince(latestJob.started_at || latestJob.created_at);
+    const stale = latestJob.status === "running" && age !== null && age > 90;
+    items.push({
+      title: stale ? "Generation is stale" : `Job ${latestJob.status}`,
+      detail: stale
+        ? `The current job has been running for about ${age} minutes. Check the worker and provider state.`
+        : latestJob.current_step || "Active generation step",
+      tone: stale ? "danger" : latestJob.status === "completed" ? "success" : latestJob.status === "failed" ? "danger" : "accent",
+      timestamp: latestJob.started_at || latestJob.created_at,
+    });
+  }
+
+  if (selectedScene) {
+    const scene = describeScene(selectedScene);
+    items.push({
+      title: scene.title,
+      detail: `Scene ${selectedScene.scene_number} is ${scene.state}. ${selectedScene.narration ? "Narration attached." : "Narration pending."}`,
+      tone: selectedScene.status === "completed" || selectedScene.status === "ready" ? "success" : selectedScene.status === "failed" ? "danger" : "neutral",
+    });
+  }
+
+  if (generatingScenes.length > 0) {
+    const scene = generatingScenes[0];
+    items.push({
+      title: `Generating scene ${scene.scene_number}`,
+      detail: scene.title || scene.prompt || "Scene render in progress",
+      tone: "accent",
+    });
+  }
+
+  if (completedScenes.length > 0) {
+    const scene = completedScenes[0];
+    items.push({
+      title: `Completed scene ${scene.scene_number}`,
+      detail: scene.title || "Media rendered and stored",
+      tone: "success",
+    });
+  }
+
+  if (data.checkpoints?.length) {
+    const pending = data.checkpoints.find((checkpoint: any) => checkpoint.status === "pending_review");
+    if (pending) {
+      items.push({
+        title: `Checkpoint ${pending.batch_number} pending review`,
+        detail: pending.narration_audio_url ? "Audio is ready for approval." : "Narration is still processing.",
+        tone: pending.narration_audio_url ? "accent" : "warning",
+        timestamp: pending.updated_at || pending.created_at,
+      });
+    }
+  }
+
+  for (const entry of data.storyHistory.slice(0, 3)) {
+    items.push({
+      title: entry.event_type,
+      detail: `Revision ${entry.revision} • ${entry.generation_version}`,
+      tone: "neutral",
+      timestamp: entry.created_at,
+    });
+  }
+
+  for (const entry of data.sceneHistory.slice(0, 3)) {
+    items.push({
+      title: `${entry.event_type} • scene`,
+      detail: `Revision ${entry.revision} • ${entry.generation_version}`,
+      tone: "neutral",
+      timestamp: entry.created_at,
+    });
+  }
+
+  return items.slice(0, 8);
+}

@@ -1,4 +1,4 @@
-import { Play, SlidersHorizontal, Film } from "lucide-react";
+import { Play, SlidersHorizontal, Film, MonitorPlay } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -80,32 +80,36 @@ export function ConsoleStage({
   latestStepLabel,
 }: Props) {
   return (
-    <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-[#e6e6e7] bg-white">
-      <div className="flex items-center gap-3 border-b border-[#e6e6e7] px-4 py-3">
+    <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[28px] border border-border bg-white shadow-[0_18px_40px_rgba(0,0,0,0.03)]">
+      <div className="flex items-center gap-3 border-b border-border px-5 py-4">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 text-[11px] font-bold uppercase text-[#71737a]">
+          <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
             <span>{selectedEpisode ? `Episode ${selectedEpisode.episode_number}` : "Workspace"}</span>
-            <span className="h-1 w-1 rounded-full bg-[#d4d4d8]" />
+            <span className="h-1 w-1 rounded-full bg-border" />
             <span>{story.workflow_type}</span>
           </div>
-          <div className="mt-1 truncate text-lg font-extrabold text-[#0c0a09]">{selectedScene?.title || story.title}</div>
-          <div className="mt-1 line-clamp-2 max-w-4xl text-sm leading-6 text-[#71737a]">
+          <div className="mt-1 truncate text-[20px] font-semibold tracking-[-0.03em] text-foreground">{selectedScene?.title || story.title}</div>
+          <div className="mt-1 line-clamp-2 max-w-4xl text-sm leading-6 text-muted-foreground">
             {selectedScene?.description || story.prompt}
           </div>
         </div>
         <div className="hidden w-[250px] items-center gap-3 md:flex">
-          <SlidersHorizontal className="h-4 w-4 text-[#71737a]" />
+          <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
           <Slider value={[zoom]} onValueChange={onZoomChange} min={72} max={108} step={2} />
-          <span className="w-9 text-right text-[11px] font-bold text-[#71737a]">{zoom}%</span>
+          <span className="w-9 text-right text-[11px] font-semibold text-muted-foreground">{zoom}%</span>
         </div>
       </div>
 
-      <div className="border-b border-[#e6e6e7] bg-[#f8f8f8] px-4 py-3">
+      <div className="border-b border-border bg-muted/30 px-5 py-3">
+        <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+          <MonitorPlay className="h-3.5 w-3.5 text-[color:#083300]" />
+          Scene strip
+        </div>
         <ScrollArea className="w-full">
-          <div className="flex gap-2 pb-1">
+          <div className="flex gap-3 pb-1">
             {episodes.map((episode) => (
-              <div key={episode.id} className="flex shrink-0 items-center gap-2 rounded-[9999px] border border-[#e6e6e7] bg-white px-3 py-1.5 text-[11px] text-[#323232]">
-                <Badge className="border-[#e6e6e7] bg-[#f2f1f0] text-[#323232]">E{episode.episode_number}</Badge>
+              <div key={episode.id} className="flex shrink-0 items-center gap-2 rounded-[9999px] border border-border bg-white px-3 py-1.5 text-[11px] text-foreground">
+                <Badge className="border-border bg-muted text-foreground">E{episode.episode_number}</Badge>
                 <span className="max-w-[220px] truncate">{episode.title}</span>
               </div>
             ))}
@@ -113,11 +117,11 @@ export function ConsoleStage({
         </ScrollArea>
       </div>
 
-      <div className="min-h-0 flex-1 bg-[#ececec] p-5">
+      <div className="min-h-0 flex-1 bg-muted/20 p-5">
         <div className="flex h-full min-h-0 flex-col gap-4">
           <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2 text-[11px] font-bold uppercase text-[#71737a]">
-              <Play className="h-3.5 w-3.5" />
+            <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+              <Play className="h-3.5 w-3.5 text-[color:#083300]" />
               <span>{latestStepLabel || "Ready"}</span>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -127,7 +131,7 @@ export function ConsoleStage({
             </div>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-hidden rounded-[24px] border border-[#d9d9d9] bg-white shadow-[0_20px_60px_rgba(0,0,0,0.12)]">
+          <div className="min-h-0 flex-1 overflow-hidden rounded-[28px] border border-border bg-black shadow-[0_24px_70px_rgba(0,0,0,0.14)]">
             {currentMedia ? (
               currentKind === "image" ? (
                 <img src={currentMedia} alt={selectedScene?.title || "Selected scene"} className="h-full w-full object-contain bg-black" />
@@ -137,11 +141,11 @@ export function ConsoleStage({
             ) : (
               <div className="flex h-full items-center justify-center text-center">
                 <div className="max-w-sm">
-                  <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[#96ff1a] text-[#083300]">
+                  <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[color:#96ff1a] text-[color:#083300]">
                     <Play className="h-7 w-7" />
                   </div>
-                  <div className="mt-5 text-2xl font-extrabold text-[#0c0a09]">No rendered scene yet</div>
-                  <div className="mt-2 text-sm leading-6 text-[#71737a]">
+                  <div className="mt-5 text-2xl font-semibold tracking-[-0.04em] text-white">No rendered scene yet</div>
+                  <div className="mt-2 text-sm leading-6 text-white/65">
                     Approve the outline and generate to populate the canvas.
                   </div>
                 </div>
@@ -149,10 +153,10 @@ export function ConsoleStage({
             )}
           </div>
 
-          <div className="rounded-[18px] border border-[#e6e6e7] bg-white p-3">
+          <div className="rounded-[18px] border border-border bg-white p-3">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <div className="text-[11px] font-bold uppercase text-[#71737a]">Scene strip</div>
-              <div className="text-[11px] text-[#71737a]">{scenes.length} scenes</div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Selected sequence</div>
+              <div className="text-[11px] text-muted-foreground">{scenes.length} scenes</div>
             </div>
             <ScrollArea className="w-full">
               <div className="flex gap-3 pb-1">

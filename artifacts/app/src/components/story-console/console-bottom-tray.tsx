@@ -1,9 +1,10 @@
 import { useState, type FormEvent } from "react";
-import { MessageSquareText, Mic2, Send } from "lucide-react";
+import { Clock3, MessageSquareText, Mic2, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { GenerationCheckpoint } from "@/lib/api";
+import type { WorkspaceActivity } from "./story-console-utils";
 
 type ChatMessage = { role: "assistant" | "user"; text: string };
 
@@ -14,6 +15,7 @@ export function ConsoleBottomTray({
   setPrompt,
   onSubmit,
   latestAudioCheckpoint,
+  activityItems = [],
 }: {
   latestJobLabel?: string | null;
   messages: ChatMessage[];
@@ -21,22 +23,27 @@ export function ConsoleBottomTray({
   setPrompt: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   latestAudioCheckpoint: GenerationCheckpoint | null;
+  activityItems?: WorkspaceActivity[];
 }) {
   const [tab, setTab] = useState("assistant");
 
   return (
-    <section className="rounded-[24px] border border-[#e6e6e7] bg-white">
-      <div className="flex items-center justify-between gap-3 border-b border-[#e6e6e7] px-4 py-3">
-        <div className="text-[11px] font-bold uppercase text-[#71737a]">
+    <section className="rounded-[24px] border border-border bg-white shadow-[0_18px_40px_rgba(0,0,0,0.03)]">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
           {latestJobLabel ? `Running now: ${latestJobLabel}` : "Activity"}
         </div>
       </div>
 
       <Tabs value={tab} onValueChange={setTab} className="p-4">
-        <TabsList className="grid w-full grid-cols-2 bg-[#f2f1f0]">
+        <TabsList className="grid w-full grid-cols-3 bg-muted">
           <TabsTrigger value="assistant" className="gap-2">
             <MessageSquareText className="h-3.5 w-3.5" />
             Assistant
+          </TabsTrigger>
+          <TabsTrigger value="logs" className="gap-2">
+            <Clock3 className="h-3.5 w-3.5" />
+            Logs
           </TabsTrigger>
           <TabsTrigger value="audio" className="gap-2">
             <Mic2 className="h-3.5 w-3.5" />
@@ -76,6 +83,36 @@ export function ConsoleBottomTray({
               <Send className="h-4 w-4" />
             </Button>
           </form>
+        </TabsContent>
+        <TabsContent value="logs" className="mt-4">
+          <div className="space-y-2">
+            {activityItems.length > 0 ? activityItems.map((item) => (
+              <div
+                key={`${item.title}-${item.timestamp ?? item.detail}`}
+                className={`rounded-[16px] border p-3 ${
+                  item.tone === "danger"
+                    ? "border-red-200 bg-red-50 text-red-800"
+                    : item.tone === "success"
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                      : item.tone === "warning"
+                        ? "border-amber-200 bg-amber-50 text-amber-800"
+                        : item.tone === "accent"
+                          ? "border-[color:#083300] bg-[color:#f5ffd8] text-[color:#083300]"
+                          : "border-border bg-muted/30 text-foreground"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm font-semibold">{item.title}</div>
+                  {item.timestamp ? <div className="text-[11px] opacity-65">{new Date(item.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div> : null}
+                </div>
+                <div className="mt-1 text-xs leading-5 opacity-80">{item.detail}</div>
+              </div>
+            )) : (
+              <div className="rounded-[16px] border border-dashed border-border bg-muted/20 p-4 text-sm leading-6 text-muted-foreground">
+                No activity yet.
+              </div>
+            )}
+          </div>
         </TabsContent>
         <TabsContent value="audio" className="mt-4">
           {latestAudioCheckpoint?.narration_audio_url ? (
