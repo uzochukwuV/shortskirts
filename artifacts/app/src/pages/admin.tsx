@@ -37,6 +37,8 @@ import { Badge } from "@/components/ui/badge";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PageHeader } from "@/components/page-header";
 
 const PIE_COLORS = ["#0c0a09", "#96ff1a", "#71737a", "#d4d4d8", "#f2f1f0", "#083300", "#4d4d51"];
 
@@ -145,17 +147,23 @@ function UserDetailDialog({
         {!data ? (
           <div className="py-10 text-sm text-[#71737a]">Loading user detail...</div>
         ) : (
-          <div className="grid max-h-[72vh] gap-4 overflow-hidden lg:grid-cols-[1.1fr_0.9fr]">
-            <div className="space-y-4 overflow-hidden">
-              <div className="grid gap-3 md:grid-cols-3">
-                {metricCard({ label: "Stories", value: data.user.story_count, hint: "All productions", icon: Database })}
-                {metricCard({ label: "Completed", value: data.user.completed_story_count, hint: "Completed stories", icon: CheckIcon })}
-                {metricCard({ label: "Failures", value: data.user.failed_story_count, hint: "Failed stories", icon: AlertTriangle })}
-              </div>
+          <Tabs defaultValue="overview" className="min-h-0">
+            <TabsList className="grid w-full grid-cols-3 bg-[#f2f1f0]">
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="jobs">Jobs</TabsTrigger>
+              <TabsTrigger value="activity">Activity</TabsTrigger>
+            </TabsList>
 
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              {metricCard({ label: "Stories", value: data.user.story_count, hint: "All productions", icon: Database })}
+              {metricCard({ label: "Completed", value: data.user.completed_story_count, hint: "Completed stories", icon: CheckIcon })}
+              {metricCard({ label: "Failures", value: data.user.failed_story_count, hint: "Failed stories", icon: AlertTriangle })}
+            </div>
+
+            <TabsContent value="overview" className="mt-4 max-h-[60vh] overflow-hidden">
               <div className="rounded-[20px] border border-[#e6e6e7] bg-white">
                 <div className="border-b border-[#e6e6e7] px-4 py-3 text-[11px] font-bold uppercase text-[#71737a]">Recent productions</div>
-                <ScrollArea className="h-[240px]">
+                <ScrollArea className="h-[44vh]">
                   <div className="divide-y divide-[#e6e6e7]">
                     {data.stories.map((story) => (
                       <div key={story.id} className="px-4 py-3">
@@ -178,12 +186,12 @@ function UserDetailDialog({
                   </div>
                 </ScrollArea>
               </div>
-            </div>
+            </TabsContent>
 
-            <div className="space-y-4 overflow-hidden">
+            <TabsContent value="jobs" className="mt-4">
               <div className="rounded-[20px] border border-[#e6e6e7] bg-white">
                 <div className="border-b border-[#e6e6e7] px-4 py-3 text-[11px] font-bold uppercase text-[#71737a]">Recent jobs</div>
-                <ScrollArea className="h-[240px]">
+                <ScrollArea className="h-[50vh]">
                   <div className="divide-y divide-[#e6e6e7]">
                     {data.recent_jobs.map((job) => (
                       <div key={job.id} className="px-4 py-3">
@@ -203,10 +211,12 @@ function UserDetailDialog({
                   </div>
                 </ScrollArea>
               </div>
+            </TabsContent>
 
+            <TabsContent value="activity" className="mt-4">
               <div className="rounded-[20px] border border-[#e6e6e7] bg-white">
                 <div className="border-b border-[#e6e6e7] px-4 py-3 text-[11px] font-bold uppercase text-[#71737a]">Recent activity</div>
-                <ScrollArea className="h-[240px]">
+                <ScrollArea className="h-[50vh]">
                   <div className="divide-y divide-[#e6e6e7]">
                     {data.recent_activity.map((item) => (
                       <div key={`${item.kind}-${item.id}`} className="px-4 py-3">
@@ -223,8 +233,8 @@ function UserDetailDialog({
                   </div>
                 </ScrollArea>
               </div>
-            </div>
-          </div>
+            </TabsContent>
+          </Tabs>
         )}
       </DialogContent>
     </Dialog>
@@ -320,33 +330,33 @@ export default function AdminPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#f2f1f0] text-[#0c0a09]">
-      <header className="sticky top-0 z-30 border-b border-[#e6e6e7] bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-[1400px] items-center gap-3 px-4 py-3 md:px-6">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[#96ff1a] text-[#083300]">
-              <Shield className="h-4 w-4" />
-            </div>
-            <div>
-              <div className="text-sm font-extrabold">Admin console</div>
-              <div className="text-[11px] text-[#71737a]">System health, users, request flow, and failures</div>
-            </div>
-          </div>
-          <div className="ml-auto flex items-center gap-2">
-            <Badge className="border-[#e6e6e7] bg-[#f2f1f0] text-[#323232]">{me.data.email}</Badge>
-            <Button variant="outline" size="sm" onClick={() => overview.refetch()}>
-              <RefreshCw className={`h-4 w-4 ${overview.isFetching ? "animate-spin" : ""}`} />
-              Refresh
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => logout.mutate()}>
-              <LogOut className="h-4 w-4" />
-              Sign out
-            </Button>
-          </div>
-        </div>
-      </header>
-
+    <div className="min-h-screen bg-background text-foreground">
       <main className="mx-auto max-w-[1400px] space-y-6 px-4 py-6 md:px-6">
+        <PageHeader
+          eyebrow="Admin console"
+          title="System health, users, request flow, and failures."
+          description="Operational view for tracking users, stories, jobs, and provider behavior across the workspace."
+          actions={
+            <>
+              <Badge className="border-border bg-muted text-foreground">{me.data.email}</Badge>
+              <Button variant="outline" size="sm" onClick={() => overview.refetch()}>
+                <RefreshCw className={`h-4 w-4 ${overview.isFetching ? "animate-spin" : ""}`} />
+                Refresh
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => logout.mutate()}>
+                <LogOut className="h-4 w-4" />
+                Sign out
+              </Button>
+            </>
+          }
+          stats={[
+            { label: "Users", value: String(overview.data?.totals.total_users ?? 0), hint: "Registered accounts" },
+            { label: "Stories", value: String(overview.data?.totals.total_stories ?? 0), hint: "All productions" },
+            { label: "Completed", value: String(overview.data?.totals.completed_stories ?? 0), hint: "Finished productions" },
+            { label: "Failures", value: String(overview.data?.totals.failed_stories ?? 0), hint: "Completed or failed jobs" },
+          ]}
+        />
+
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           {metricCard({ label: "Users", value: overview.data?.totals.total_users ?? 0, hint: "Registered accounts", icon: Users })}
           {metricCard({ label: "Stories", value: overview.data?.totals.total_stories ?? 0, hint: "All productions", icon: Database })}
