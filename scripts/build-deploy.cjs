@@ -11,6 +11,11 @@ const distServerDir = path.join(distDir, 'server');
 const distOpenAiDir = path.join(distDir, '.openai');
 const hostingJsonPath = path.join(distOpenAiDir, 'hosting.json');
 const backendRunScript = path.join(rootDir, 'artifacts', 'pipeline', 'run.sh');
+const defaultBackendBase = (
+  process.env.BACKEND_API_BASE ||
+  process.env.PIPELINE_API_BASE ||
+  'http://8.222.176.62:8080'
+).replace(/\/+$/, '');
 
 const build = spawnSync('npm', ['--prefix', 'artifacts/app', 'run', 'build'], {
   cwd: rootDir,
@@ -37,12 +42,14 @@ fs.writeFileSync(path.join(distServerDir, 'index.js'), makeServerBundle());
 
 function makeServerBundle() {
   return `
+const DEFAULT_BACKEND_BASE = ${JSON.stringify(defaultBackendBase)};
+
 function backendBase(env) {
   return (
     env.PIPELINE_API_BASE ||
     env.VITE_PIPELINE_API_BASE ||
     env.BACKEND_API_BASE ||
-    ''
+    DEFAULT_BACKEND_BASE
   ).replace(/\\/+$/, '');
 }
 
