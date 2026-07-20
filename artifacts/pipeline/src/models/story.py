@@ -15,6 +15,12 @@ class WorkflowType(str, Enum):
     narrated_image_story = "narrated_image_story"  # Still-image story beats with narration
 
 
+class MediaKind(str, Enum):
+    auto = "auto"
+    video = "video"
+    image = "image"
+
+
 class BibleType(str, Enum):
     brand     = "brand"       # Colors, tone, forbidden claims, CTAs
     character = "character"   # Face, outfit, personality, voice
@@ -77,6 +83,7 @@ class StoryCreate(BaseModel):
     num_episodes: int = Field(default=1, ge=1, le=5)
     num_scenes: int = Field(default=5, ge=3, le=10)
     workflow_type: WorkflowType = WorkflowType.creator_series
+    requested_media_kind: MediaKind = MediaKind.auto
     bible_ids: list[str] = Field(default_factory=list)
     style_reference_urls: list[str] = Field(default_factory=list)
     character_reference_urls: list[str] = Field(default_factory=list)
@@ -94,6 +101,7 @@ class StoryResponse(BaseModel):
     num_scenes: int
     status: StoryStatus
     workflow_type: WorkflowType = WorkflowType.creator_series
+    requested_media_kind: MediaKind = MediaKind.auto
     workflow_version: str = "v1"
     generation_version: str = "v1"
     approval_status: str = "pending_approval"

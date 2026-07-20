@@ -13,7 +13,7 @@ from pipeline.history import (
     record_story_history,
 )
 from pipeline.job_runtime import update_job
-from pipeline.scene_gen import generate_scene_clip
+from pipeline.generation_coordinator import GenerationCoordinatorError, generate_with_coordinator
 from pipeline.versioning import (
     GENERATION_VERSION,
     IMAGE_MODEL_NAME,
@@ -22,7 +22,7 @@ from pipeline.versioning import (
     build_state_snapshot,
 )
 from pipeline.assembler import assemble_episode
-from pipeline.narrated_image_story import generate_narrated_scene_image, assemble_narrated_episode
+from pipeline.narrated_image_story import assemble_narrated_episode
 
 
 def _json_loads(value):
@@ -45,6 +45,24 @@ def _workflow_refs(story: dict, key: str) -> list[str]:
         except Exception:
             refs = []
     return [u for u in refs if u]
+
+
+def _merge_workflow_state(story: dict, patch: dict) -> dict:
+    workflow_state = story.get("workflow_state") or {}
+    if isinstance(workflow_state, str):
+        try:
+            workflow_state = json.loads(workflow_state)
+        except Exception:
+            workflow_state = {}
+    if not isinstance(workflow_state, dict):
+        workflow_state = {}
+    merged = {**workflow_state}
+    for key, value in (patch or {}).items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    return merged
 
 
 async def _sync_scene_characters(pool, scene_id: str, story_id: str, character_names: list[str]) -> None:
@@ -475,28 +493,17 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
                 )
 
             try:
-                if is_narrated_image_story:
-                    result = await generate_narrated_scene_image(
-                        story_id=story_id,
-                        episode_id=str(ep_id),
-                        scene=scene_plan,
-                        story_context=plan,
-                        character_refs=char_refs,
-                        previous_scene_image_url=previous_exit_frame,
-                        previous_scene_summary=previous_summary,
-                        style=story["style"],
-                    )
-                else:
-                    result = await generate_scene_clip(
-                        story_id=story_id,
-                        episode_id=str(ep_id),
-                        scene=scene_plan,
-                        story_context=plan,
-                        character_refs=char_refs,
-                        previous_exit_frame_url=previous_exit_frame,
-                        previous_scene_summary=previous_summary,
-                        style=story["style"],
-                    )
+                result, generation_plan = await generate_with_coordinator(
+                    story=story,
+                    episode_id=str(ep_id),
+                    scene=scene_plan,
+                    story_context=plan,
+                    character_refs=char_refs,
+                    previous_exit_frame_url=previous_exit_frame,
+                    previous_scene_image_url=previous_exit_frame,
+                    previous_scene_summary=previous_summary,
+                    style=story["style"],
+                )
 
                 merged_meta = json.dumps({
                     "title": scene_plan.get("title", f"Scene {scene_num}"),
@@ -513,7 +520,9 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
                     "image_url": result.get("image_url"),
                     "media_url": result.get("image_url") or result.get("clip_url"),
                     "exit_frame_url": result.get("exit_frame_url"),
+                    "video_provider": result.get("video_provider"),
                     "narration_model": narration_model if is_narrated_image_story else None,
+                    "generation_coordinator": generation_plan.model_dump(),
                 })
 
                 if is_narrated_image_story:
@@ -538,6 +547,8 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
                                 "refs_used": result.get("refs_used", 0),
                                 "image_url": result.get("image_url"),
                                 "media_url": result.get("image_url") or result.get("clip_url"),
+                                "video_provider": result.get("video_provider"),
+                                "generation_coordinator": generation_plan.model_dump(),
                             },
                         )),
                         scene_id,
@@ -562,6 +573,8 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
                                 "scene_number": scene_num,
                                 "clip_url": result.get("clip_url"),
                                 "media_url": result.get("clip_url"),
+                                "video_provider": result.get("video_provider"),
+                                "generation_coordinator": generation_plan.model_dump(),
                             },
                         )),
                         scene_id,
@@ -582,6 +595,15 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
                         },
                     )
 
+                if generation_plan.state_patch:
+                    merged_workflow_state = _merge_workflow_state(story, generation_plan.state_patch)
+                    await pool.execute(
+                        "UPDATE stories SET workflow_state=$1::jsonb, updated_at=now() WHERE id=$2",
+                        json.dumps(merged_workflow_state),
+                        story_id,
+                    )
+                    story["workflow_state"] = merged_workflow_state
+
                 previous_summary = scene_plan.get("description", "")
                 generated_since_checkpoint += 1
                 if is_narrated_image_story:
@@ -593,6 +615,24 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
                     })
                 step += 1
 
+            except GenerationCoordinatorError as e:
+                print(f"[orchestrator] Coordinator handoff for scene {scene_num}: {e}")
+                await pool.execute("UPDATE scenes SET status='failed' WHERE id=$1", scene_id)
+                failed_scene = await pool.fetchrow("SELECT * FROM scenes WHERE id=$1", scene_id)
+                if failed_scene:
+                    await record_scene_history(
+                        pool,
+                        story=story,
+                        scene=failed_scene,
+                        event_type="scene_generation_handoff",
+                        payload={
+                            "status": failed_scene["status"],
+                            "scene_number": scene_num,
+                            "error": str(e)[:500],
+                            "generation_coordinator": e.plan.model_dump() if e.plan else None,
+                        },
+                    )
+                step += 1
             except Exception as e:
                 print(f"[orchestrator] Scene {scene_num} failed: {e}")
                 await pool.execute("UPDATE scenes SET status='failed' WHERE id=$1", scene_id)

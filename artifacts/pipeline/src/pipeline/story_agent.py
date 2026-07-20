@@ -218,6 +218,7 @@ async def generate_episode_plan(
     ref_lines: list[str] = []
     reference_context = reference_context or {}
     frame_ratio = reference_context.get("frame_ratio") or "16:9"
+    requested_media_kind = reference_context.get("requested_media_kind") or "auto"
     for label, urls in (
         ("style_reference_urls", reference_context.get("style_reference_urls") or []),
         ("character_reference_urls", reference_context.get("character_reference_urls") or []),
@@ -237,6 +238,7 @@ async def generate_episode_plan(
         f"Number of episodes: {num_episodes}\n"
         f"Scenes per episode: {num_scenes}\n"
         f"Workflow type: {workflow_type}\n"
+        f"Requested media kind: {requested_media_kind}\n"
         f"Frame ratio: {frame_ratio}\n"
         f"{reference_block}"
         f"{bible_block}\n"

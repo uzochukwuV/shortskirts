@@ -34,6 +34,7 @@ async def generate_scene_clip(
     previous_exit_frame_url: Optional[str],
     previous_scene_summary: str = "",
     style: str = "anime",
+    preferred_provider: Optional[str] = None,
 ) -> dict:
     scene_number = scene["scene_number"]
     prompt = await build_scene_prompt(scene, story_context, previous_scene_summary, style)
@@ -59,12 +60,16 @@ async def generate_scene_clip(
         continuity_note = "Maintain the same character identity, costume, and visual tone as the provided reference."
         prompt = f"{prompt}\n\n{continuity_note}"
 
-    # Try DashScope video first, fall back to AIML.
-    # If Wan i2v is unavailable, we intentionally call t2v instead of forcing a broken reference path.
-    if reference_image is None and not wan_t2v_available:
+    # The coordinator can pin the provider order. When no hint is supplied, we keep the
+    # existing "DashScope first, AIML fallback" behavior.
+    if reference_image is None and not wan_t2v_available and preferred_provider in (None, "dashscope"):
         raise RuntimeError("Wan text-to-video is unavailable and no reference frame was available for Wan image-to-video")
 
-    video_url = await _generate_video(prompt, reference_image if wan_i2v_available else None)
+    video_url, provider_used = await _generate_video(
+        prompt,
+        reference_image if wan_i2v_available else None,
+        preferred_provider=preferred_provider,
+    )
 
     # Download once — reuse for both B2 upload and exit frame extraction
     clip_bytes = await download_url_to_bytes(video_url)
@@ -82,6 +87,7 @@ async def generate_scene_clip(
         "prompt": prompt,
         "refs_used": 1 if (reference_image and wan_i2v_available) else 0,
         "seed_frame_url": seed_frame_url,
+        "video_provider": provider_used,
     }
 
 
@@ -279,15 +285,26 @@ async def _poll_aiml_video(task_id: str, api_key: str, timeout: int = 600) -> st
     raise TimeoutError(f"AIML video task {task_id} timed out after {timeout}s")
 
 
-async def _generate_video(prompt: str, image_url: Optional[str] = None) -> str:
-    """Try DashScope first, fall back to AIML."""
+async def _generate_video(prompt: str, image_url: Optional[str] = None, preferred_provider: Optional[str] = None) -> tuple[str, str]:
+    """Generate video with provider ordering controlled by the coordinator."""
+    if preferred_provider == "aiml":
+        print("[scene_gen] Coordinator selected AIML first")
+        return await _try_aiml_video(prompt, image_url), "aiml"
+
+    if preferred_provider == "dashscope":
+        result = await _try_dashscope_video(prompt, image_url)
+        if result:
+            print("[scene_gen] Video generated via DashScope (Qwen Cloud)")
+            return result, "dashscope"
+        raise RuntimeError("DashScope video generation failed")
+
     result = await _try_dashscope_video(prompt, image_url)
     if result:
         print("[scene_gen] Video generated via DashScope (Qwen Cloud)")
-        return result
+        return result, "dashscope"
 
     print("[scene_gen] DashScope unavailable, using AIML fallback")
-    return await _try_aiml_video(prompt, image_url)
+    return await _try_aiml_video(prompt, image_url), "aiml"
 
 
 async def _post_json(http: httpx.AsyncClient, url: str, headers: dict, payload: dict):

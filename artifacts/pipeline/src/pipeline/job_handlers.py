@@ -6,8 +6,7 @@ from pipeline.history import record_checkpoint_history, record_scene_history, re
 from pipeline.character_gen import generate_character_references, get_character_embedding
 from pipeline.audio_gen import synthesize_narration_audio
 from pipeline.job_runtime import update_job
-from pipeline.scene_gen import generate_scene_clip
-from pipeline.narrated_image_story import generate_narrated_scene_image
+from pipeline.generation_coordinator import GenerationCoordinatorError, generate_with_coordinator
 from pipeline.versioning import (
     GENERATION_VERSION,
     IMAGE_EDIT_MODEL_NAME,
@@ -31,6 +30,24 @@ def _workflow_refs(story: dict, key: str) -> list[str]:
         except Exception:
             refs = []
     return [u for u in refs if u]
+
+
+def _merge_workflow_state(story: dict, patch: dict) -> dict:
+    workflow_state = story.get("workflow_state") or {}
+    if isinstance(workflow_state, str):
+        try:
+            workflow_state = json.loads(workflow_state)
+        except Exception:
+            workflow_state = {}
+    if not isinstance(workflow_state, dict):
+        workflow_state = {}
+    merged = {**workflow_state}
+    for key, value in (patch or {}).items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    return merged
 
 
 async def _sync_scene_characters(pool, scene_id: str, story_id: str, character_names: list[str]) -> None:
@@ -190,30 +207,22 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
             [name for name in scene_plan.get("characters_present", []) if name],
         )
 
-        if is_narrated_image_story:
-            await update_job(pool, job_id, current_step="Generating new image scene")
-            result = await generate_narrated_scene_image(
-                story_id=str(story["id"]),
-                episode_id=str(episode["id"]),
-                scene=scene_plan,
-                story_context=plan,
-                character_refs=char_refs,
-                previous_scene_image_url=None,
-                previous_scene_summary="",
-                style=story["style"],
-            )
-        else:
-            await update_job(pool, job_id, current_step="Generating new video clip")
-            result = await generate_scene_clip(
-                story_id=str(story["id"]),
-                episode_id=str(episode["id"]),
-                scene=scene_plan,
-                story_context=plan,
-                character_refs=char_refs,
-                previous_exit_frame_url=None,
-                previous_scene_summary="",
-                style=story["style"],
-            )
+        await update_job(
+            pool,
+            job_id,
+            current_step="Generating new image scene" if is_narrated_image_story else "Generating new video clip",
+        )
+        result, generation_plan = await generate_with_coordinator(
+            story=story,
+            episode_id=str(episode["id"]),
+            scene=scene_plan,
+            story_context=plan,
+            character_refs=char_refs,
+            previous_exit_frame_url=None,
+            previous_scene_image_url=None,
+            previous_scene_summary="",
+            style=story["style"],
+        )
 
         existing_meta = scene["generation_metadata"]
         if isinstance(existing_meta, str):
@@ -232,6 +241,8 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
             "image_url": result.get("image_url"),
             "media_url": result.get("image_url") or result.get("clip_url"),
             "exit_frame_url": result.get("exit_frame_url"),
+            "video_provider": result.get("video_provider"),
+            "generation_coordinator": generation_plan.model_dump(),
         }
         regen_count = (scene.get("regeneration_count") or 0) + 1
         if is_narrated_image_story:
@@ -246,6 +257,8 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
                 "edit_model_version": IMAGE_EDIT_MODEL_VERSION,
                 "image_url": result.get("image_url"),
                 "media_url": result.get("image_url") or result.get("clip_url"),
+                "video_provider": result.get("video_provider"),
+                "generation_coordinator": generation_plan.model_dump(),
             }
             await pool.execute(
                 """UPDATE scenes SET image_url=$1, clip_url=NULL, exit_frame_url=$2, duration=$3,
@@ -275,6 +288,8 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
                 "generation_version": story.get("generation_version", GENERATION_VERSION),
                 "clip_url": result.get("clip_url"),
                 "media_url": result.get("clip_url"),
+                "video_provider": result.get("video_provider"),
+                "generation_coordinator": generation_plan.model_dump(),
             }
             await pool.execute(
                 """UPDATE scenes SET clip_url=$1, exit_frame_url=$2, duration=$3,
@@ -305,6 +320,13 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
                     "regen_count": regen_count,
                 },
             )
+        if generation_plan.state_patch:
+            merged_workflow_state = _merge_workflow_state(story, generation_plan.state_patch)
+            await pool.execute(
+                "UPDATE stories SET workflow_state=$1::jsonb, updated_at=now() WHERE id=$2",
+                json.dumps(merged_workflow_state),
+                str(story["id"]),
+            )
         await update_job(
             pool,
             job_id,
@@ -318,6 +340,32 @@ async def run_scene_regen_job(scene_id: str, job_id: str, worker_id: str):
                 "image_url": result.get("image_url"),
             },
         )
+    except GenerationCoordinatorError as e:
+        print(f"[scenes] Coordinator handoff for {scene_id}: {e}")
+        await pool.execute("UPDATE scenes SET status='failed', updated_at=now() WHERE id=$1", scene_id)
+        failed_scene = await pool.fetchrow("SELECT * FROM scenes WHERE id=$1", scene_id)
+        if failed_scene:
+            await record_scene_history(
+                pool,
+                story=story,
+                scene=failed_scene,
+                event_type="scene_regen_handoff",
+                source_job_id=job_id,
+                payload={
+                    "status": failed_scene["status"],
+                    "error": str(e)[:500],
+                    "generation_coordinator": e.plan.model_dump() if e.plan else None,
+                },
+            )
+        await update_job(
+            pool,
+            job_id,
+            status="failed",
+            current_step=f"Failed: {str(e)[:200]}",
+            error=str(e)[:1000],
+            completed_at=datetime.utcnow(),
+        )
+        raise
     except Exception as e:
         print(f"[scenes] Regen failed for {scene_id}: {e}")
         await pool.execute("UPDATE scenes SET status='failed', updated_at=now() WHERE id=$1", scene_id)

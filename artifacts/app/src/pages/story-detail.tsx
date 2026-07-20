@@ -517,6 +517,25 @@ export default function StoryDetail() {
     setPrompt("");
   };
 
+  const activityItems = useMemo(
+    () =>
+      story
+        ? buildWorkspaceActivity({
+            story,
+            episodes,
+            allScenes,
+            characters,
+            storyHistory,
+            sceneHistory,
+            checkpoints,
+            latestStoryJob,
+            selectedScene,
+          })
+        : [],
+    [story, episodes, allScenes, characters, storyHistory, sceneHistory, checkpoints, latestStoryJob, selectedScene],
+  );
+  const zoomScale = Math.max(0.62, Math.min(1.1, canvasZoom[0] / 100));
+
   if (storyLoading) return <div className="flex h-screen items-center justify-center bg-[#f2f1f0] text-[#71737a]">Loading workspace...</div>;
   if (!story) return <div className="flex h-screen items-center justify-center bg-[#f2f1f0] text-[#0c0a09]">Story not found.</div>;
 
@@ -532,22 +551,6 @@ export default function StoryDetail() {
     : expectedScenes
       ? Math.min(100, Math.round((completedScenes / expectedScenes) * 100))
       : 0;
-  const activityItems = useMemo(
-    () =>
-      buildWorkspaceActivity({
-        story,
-        episodes,
-        allScenes,
-        characters,
-        storyHistory,
-        sceneHistory,
-        checkpoints,
-        latestStoryJob,
-        selectedScene,
-      }),
-    [story, episodes, allScenes, characters, storyHistory, sceneHistory, checkpoints, latestStoryJob, selectedScene],
-  );
-  const zoomScale = Math.max(0.62, Math.min(1.1, canvasZoom[0] / 100));
 
   return (
     <div className="min-h-[calc(100vh-120px)] overflow-hidden bg-background text-foreground">

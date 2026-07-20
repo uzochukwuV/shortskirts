@@ -1,0 +1,103 @@
+common:
+  deployment:
+    ecsInstanceType: ecs.u1-c1m2.large
+    instanceId: i-t4n8gt40krtdeqh894ke
+    internetMaxBandwidthOut: 5
+    port: 8080
+    systemDiskSize: 40
+  environment:
+    B2_APPLICATION_KEY: K005sv23WaQaEC6XB/Vxi4PorYxqpt4
+    B2_BUCKET_NAME: anime-shorts
+    B2_ENDPOINT_URL: s3.us-east-005.backblazeb2.com
+    B2_KEY_ID: 0051935951af6d10000000005
+    B2_READ_APPLICATION_KEY: K005/zScOcjL5j0pax689thhBwiEwFg
+    B2_READ_KEY_ID: 0051935951af6d10000000007
+    COCKROACHDB_URL: postgresql://anime-shorts:8uFPik4UJX5BwVGpKTzHJg@anime-shorts-28316.j77.aws-eu-central-1.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full
+    DASHSCOPE_API_KEY: sk-ws-H.XHXEPM.akEN.MEUCIQDa7iQl8ZLKDyMjmWFrMZBCqeWhrjk8mWorR8jJslzErAIgCBifYHh0X-__IFzcDJbSoA8df9cEpbhW0-359ioh4YA
+    REDIS_URL: redis-cli -u redis://default:QvR8QAj8vJAX1rmgFuMfomagiQLUrHEo@decision-hair-flavor-24816.db.redis.io:10965
+  scripts:
+    start: |-
+      #!/bin/bash
+      set -e
+      APP_DIR=/root/project
+      ZIP_FILE=$(ls /root/project_*.zip 2>/dev/null | tail -1)
+      LOG_FILE=/root/app.log
+      PID_FILE=/root/app.pid
+
+      export COCKROACHDB_URL='postgresql://anime-shorts:8uFPik4UJX5BwVGpKTzHJg@anime-shorts-28316.j77.aws-eu-central-1.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full'
+      export REDIS_URL='redis-cli -u redis://default:QvR8QAj8vJAX1rmgFuMfomagiQLUrHEo@decision-hair-flavor-24816.db.redis.io:10965'
+      export DASHSCOPE_API_KEY='sk-ws-H.XHXEPM.akEN.MEUCIQDa7iQl8ZLKDyMjmWFrMZBCqeWhrjk8mWorR8jJslzErAIgCBifYHh0X-__IFzcDJbSoA8df9cEpbhW0-359ioh4YA'
+      export B2_BUCKET_NAME='anime-shorts'
+      export B2_ENDPOINT_URL='s3.us-east-005.backblazeb2.com'
+      export B2_KEY_ID='0051935951af6d10000000005'
+      export B2_APPLICATION_KEY='K005sv23WaQaEC6XB/Vxi4PorYxqpt4'
+      export B2_READ_KEY_ID='0051935951af6d10000000007'
+      export B2_READ_APPLICATION_KEY='K005/zScOcjL5j0pax689thhBwiEwFg'
+
+      [ -f "$PID_FILE" ] && kill "$(cat "$PID_FILE")" 2>/dev/null || true
+      rm -f "$PID_FILE"
+
+      if command -v dnf &>/dev/null; then
+        PKG_MGR="dnf"
+      elif command -v yum &>/dev/null; then
+        PKG_MGR="yum"
+      elif command -v apt-get &>/dev/null; then
+        PKG_MGR="apt-get"
+      else
+        echo "ERROR: No supported package manager found" && exit 1
+      fi
+
+      if ! command -v unzip &>/dev/null; then
+        $PKG_MGR install -y unzip
+      fi
+
+      if ! command -v python3 &>/dev/null; then
+        if command -v apt-get &>/dev/null; then
+          apt-get update -qq && apt-get install -y -qq python3 python3-pip python3-venv
+        else
+          $PKG_MGR install -y python3 python3-pip
+        fi
+      fi
+
+      if ! command -v pip3 &>/dev/null; then
+        if command -v apt-get &>/dev/null; then
+          apt-get update -qq && apt-get install -y -qq python3-pip
+        else
+          $PKG_MGR install -y python3-pip
+        fi
+      fi
+
+      mkdir -p "$APP_DIR"
+      [ -n "$ZIP_FILE" ] && unzip -o "$ZIP_FILE" -d "$APP_DIR"
+
+      cd "$APP_DIR"
+      pip3 install -r artifacts/pipeline/requirements.txt -q
+
+      nohup bash -lc 'cd /root/project/artifacts/pipeline/src && python3 -m uvicorn alibaba_entry:app --host 0.0.0.0 --port 8080 --log-level info' >> "$LOG_FILE" 2>&1 &
+      echo $! > "$PID_FILE"
+
+      sleep 3 && cat /root/app.log
+    stop: |-
+      #!/bin/bash
+      PID_FILE=/root/app.pid
+      APP_DIR=/root/project
+
+      if [ -f "$PID_FILE" ]; then
+          PID=$(cat "$PID_FILE")
+          if kill -0 "$PID" 2>/dev/null; then
+              kill "$PID"
+              sleep 3
+              kill -0 "$PID" 2>/dev/null && kill -9 "$PID"
+          fi
+          rm -f "$PID_FILE"
+      fi
+
+      if [ -n "$APP_DIR" ] && [ "${#APP_DIR}" -gt 6 ] && [[ "$APP_DIR" == /root/* ]] && [ -d "$APP_DIR" ]; then
+          rm -rf "$APP_DIR"
+      fi
+metadata:
+  description: ''
+  groupName: storyforge-20260719-ap-southeast-1
+  name: storyforge-20260719
+  regionId: ap-southeast-1
+  type: app
