@@ -1,0 +1,56 @@
+{
+  "name": "Scene",
+  "type": "object",
+  "properties": {
+    "episode_id": {
+      "type": "string"
+    },
+    "series_id": {
+      "type": "string"
+    },
+    "order": {
+      "type": "number",
+      "default": 1
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "video",
+        "narrated_image",
+        "voice"
+      ],
+      "default": "video"
+    },
+    "title": {
+      "type": "string"
+    },
+    "script": {
+      "type": "string",
+      "description": "Scene script / shot description"
+    },
+    "narration": {
+      "type": "string",
+      "description": "Voiceover or narration text"
+    },
+    "media_url": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "pending_review",
+        "approved",
+        "regenerating"
+      ],
+      "default": "draft"
+    },
+    "checkpoint_notes": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "episode_id",
+    "series_id"
+  ]
+}

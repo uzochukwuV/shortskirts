@@ -7,6 +7,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from pipeline.pipeline_config import normalize_pipeline_config
+
 try:
     from langchain_core.prompts import ChatPromptTemplate
     from langchain_openai import ChatOpenAI
@@ -69,6 +71,14 @@ def _normalize_requested_media_kind(story: dict[str, Any], scene: dict[str, Any]
         return RequestedMediaKind(scene_kind)
 
     workflow_state = _workflow_state(story)
+    pipeline_config = normalize_pipeline_config(
+        workflow_state=workflow_state,
+        workflow_type=story.get("workflow_type"),
+    )
+    config_kind = (pipeline_config.get("media", {}).get("kind") or "").strip().lower()
+    if config_kind in {"video", "image"}:
+        return RequestedMediaKind(config_kind)
+
     workflow_kind = (workflow_state.get("requested_media_kind") or "").strip().lower()
     if workflow_kind in {"video", "image"}:
         return RequestedMediaKind(workflow_kind)
@@ -85,8 +95,12 @@ def _build_fallback_chain(
     provider_status: dict[str, Any],
     character_refs: list[str],
     previous_exit_frame_url: Optional[str],
+    pipeline_config: dict[str, Any],
 ) -> list[str]:
     if requested_kind == RequestedMediaKind.image:
+        image_preference = pipeline_config.get("providers", {}).get("image_preference") or []
+        if image_preference:
+            return list(dict.fromkeys([str(item) for item in image_preference if item] + ["qwen-image-plus", "aiml-image"]))
         return [
             "qwen-image-edit-plus",
             "qwen-image-plus",
@@ -155,16 +169,19 @@ async def _langchain_decision(
     )
 
     chain = prompt | llm
-    response = await chain.ainvoke(
-        {
-            "workflow_type": story.get("workflow_type") or "creator_series",
-            "requested_kind": requested_kind.value,
-            "scene_kind": scene.get("media_kind") or "",
-            "provider_status": json.dumps(provider_status, sort_keys=True),
-            "title": scene.get("title") or "",
-            "description": scene.get("description") or scene.get("visual_prompt") or "",
-        }
-    )
+    try:
+        response = await chain.ainvoke(
+            {
+                "workflow_type": story.get("workflow_type") or "creator_series",
+                "requested_kind": requested_kind.value,
+                "scene_kind": scene.get("media_kind") or "",
+                "provider_status": json.dumps(provider_status, sort_keys=True),
+                "title": scene.get("title") or "",
+                "description": scene.get("description") or scene.get("visual_prompt") or "",
+            }
+        )
+    except Exception:
+        return None
     content = getattr(response, "content", None) or ""
     if not content:
         return None
@@ -196,6 +213,10 @@ async def build_generation_plan(
     requested_kind = _normalize_requested_media_kind(story, scene)
     workflow_type = (story.get("workflow_type") or "creator_series").strip()
     workflow_state = _workflow_state(story)
+    pipeline_config = normalize_pipeline_config(
+        workflow_state=workflow_state,
+        workflow_type=workflow_type,
+    )
 
     selected_media_kind = "image" if requested_kind == RequestedMediaKind.image else "video"
     selected_route = "image"
@@ -244,7 +265,11 @@ async def build_generation_plan(
 
     if selected_media_kind == "video":
         wan = provider_status.get("wan", {}) if isinstance(provider_status, dict) else {}
-        has_video_provider = bool(wan.get("i2v", {}).get("available") or wan.get("t2v", {}).get("available"))
+        has_video_provider = bool(
+            wan.get("i2v", {}).get("available")
+            or wan.get("t2v", {}).get("available")
+            or os.environ.get("AIML_API_KEY", "")
+        )
         if not has_video_provider:
             should_handoff = True
             handoff_reason = handoff_reason or "No video-capable provider is currently available."
@@ -254,21 +279,35 @@ async def build_generation_plan(
             )
 
     if selected_media_kind == "image" and requested_kind == RequestedMediaKind.video:
-        # Never silently convert an explicit video request into stills.
-        should_handoff = True
-        handoff_reason = handoff_reason or "The coordinator will not silently change a requested video production into images."
-        user_message = user_message or "A video route was requested, but the current plan would change the output type. Please revise the workflow or retry."
+        if pipeline_config.get("providers", {}).get("allow_fallback_to_image"):
+            reason = f"{reason} Fallback to image is allowed by pipeline config."
+        else:
+            # Never silently convert an explicit video request into stills.
+            should_handoff = True
+            handoff_reason = handoff_reason or "The coordinator will not silently change a requested video production into images."
+            user_message = user_message or "A video route was requested, but the current plan would change the output type. Please revise the workflow or retry."
 
     selected_provider_hint = None
     if selected_media_kind == "video":
         workflow_state = _workflow_state(story)
         selected_provider_hint = (workflow_state.get("generation_coordinator") or {}).get("preferred_video_provider")
         if not selected_provider_hint:
+            provider_preference = pipeline_config.get("providers", {}).get("video_preference") or []
+            for preferred in provider_preference:
+                if preferred == "dashscope" and os.environ.get("DASHSCOPE_API_KEY", ""):
+                    selected_provider_hint = "dashscope"
+                    break
+                if preferred == "aiml" and os.environ.get("AIML_API_KEY", ""):
+                    selected_provider_hint = "aiml"
+                    break
+        if not selected_provider_hint:
             wan = provider_status.get("wan", {}) if isinstance(provider_status, dict) else {}
             if wan.get("i2v", {}).get("available") or wan.get("t2v", {}).get("available"):
                 selected_provider_hint = "dashscope"
-            else:
+            elif os.environ.get("AIML_API_KEY", ""):
                 selected_provider_hint = "aiml"
+            else:
+                selected_provider_hint = None
     elif selected_media_kind == "image":
         selected_provider_hint = "qwen"
 
@@ -277,6 +316,7 @@ async def build_generation_plan(
         provider_status=provider_status,
         character_refs=character_refs,
         previous_exit_frame_url=previous_exit_frame_url or previous_scene_image_url,
+        pipeline_config=pipeline_config,
     )
     if selected_media_kind == "video":
         ordered = []
@@ -285,6 +325,8 @@ async def build_generation_plan(
         for provider in fallback_chain:
             if provider not in ordered:
                 ordered.append(provider)
+        if os.environ.get("AIML_API_KEY", "") and "aiml" not in ordered:
+            ordered.append("aiml")
         fallback_chain = ordered
 
     return GenerationPlan(
@@ -323,6 +365,17 @@ async def generate_with_coordinator(
     from pipeline.scene_gen import generate_scene_clip
 
     provider_status = await get_provider_status()
+    workflow_state = _workflow_state(story)
+    pipeline_config = normalize_pipeline_config(
+        workflow_state=workflow_state,
+        workflow_type=story.get("workflow_type"),
+    )
+    generation_context = {
+        **(story_context or {}),
+        "workflow_state": workflow_state,
+        "pipeline_config": pipeline_config,
+        "requested_video_ratio": pipeline_config.get("media", {}).get("ratio"),
+    }
     plan = await build_generation_plan(
         story=story,
         scene=scene,
@@ -342,7 +395,7 @@ async def generate_with_coordinator(
                 story_id=str(story["id"]),
                 episode_id=episode_id,
                 scene=scene,
-                story_context=story_context,
+                story_context=generation_context,
                 character_refs=character_refs,
                 previous_scene_image_url=previous_scene_image_url or previous_exit_frame_url,
                 previous_scene_summary=previous_scene_summary,
@@ -362,32 +415,36 @@ async def generate_with_coordinator(
             last_exc = exc
             raise GenerationCoordinatorError(f"All image engines failed. Last error: {last_exc}", plan=plan)
 
-    for provider_hint in (plan.candidate_engines or ["dashscope", "aiml"]):
-        try:
-            result = await generate_scene_clip(
-                story_id=str(story["id"]),
-                episode_id=episode_id,
-                scene=scene,
-                story_context=story_context,
-                character_refs=character_refs,
-                previous_exit_frame_url=previous_exit_frame_url or previous_scene_image_url,
-                previous_scene_summary=previous_scene_summary,
-                style=style,
-                preferred_provider=provider_hint,
-            )
-            plan.selected_provider = result.get("video_provider") or provider_hint
-            plan.state_patch = {
-                "generation_coordinator": {
-                    "preferred_media_kind": "video",
-                    "preferred_video_provider": plan.selected_provider,
-                }
+    try:
+        result = await generate_scene_clip(
+            story_id=str(story["id"]),
+            episode_id=episode_id,
+            scene=scene,
+            story_context=generation_context,
+            character_refs=character_refs,
+            previous_exit_frame_url=previous_exit_frame_url or previous_scene_image_url,
+            previous_scene_summary=previous_scene_summary,
+            style=style,
+            preferred_provider=plan.selected_provider_hint,
+        )
+        plan.selected_provider = result.get("video_provider") or plan.selected_provider_hint
+        plan.candidate_engines = [
+            attempt.get("model")
+            for attempt in result.get("agent_video_plan", {}).get("attempts", [])
+            if attempt.get("model")
+        ] or plan.candidate_engines
+        plan.state_patch = {
+            "generation_coordinator": {
+                "preferred_media_kind": "video",
+                "preferred_video_provider": plan.selected_provider,
+                "preferred_video_model": result.get("video_model"),
             }
-            result["generation_plan"] = plan.model_dump()
-            result["selected_media_kind"] = plan.selected_media_kind
-            return result, plan
-        except Exception as exc:
-            last_exc = exc
-            continue
+        }
+        result["generation_plan"] = plan.model_dump()
+        result["selected_media_kind"] = plan.selected_media_kind
+        return result, plan
+    except Exception as exc:
+        last_exc = exc
 
     raise GenerationCoordinatorError(
         f"All video engines failed. Last error: {last_exc}",

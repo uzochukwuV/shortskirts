@@ -9,6 +9,7 @@ import StoryDetail from "@/pages/story-detail";
 import Admin from "@/pages/admin";
 import Pricing from "@/pages/pricing";
 import Login from "@/pages/login";
+import Gallery from "@/pages/gallery";
 import { AuthProvider, useAuth } from "@/lib/auth";
 
 const queryClient = new QueryClient();
@@ -29,6 +30,7 @@ function Router() {
       <Route path="/stories/:id">{() => <ProtectedRoute component={StoryDetail} />}</Route>
       <Route path="/admin" component={Admin} />
       <Route path="/pricing" component={Pricing} />
+      <Route path="/gallery" component={Gallery} />
       <Route component={NotFound} />
     </Switch>
   );

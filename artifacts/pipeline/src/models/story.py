@@ -80,6 +80,7 @@ class StoryCreate(BaseModel):
     genre: str = "action"
     style: str = "anime"
     frame_ratio: str = "16:9"
+    requested_video_ratio: str = "16:9"
     num_episodes: int = Field(default=1, ge=1, le=5)
     num_scenes: int = Field(default=5, ge=3, le=10)
     workflow_type: WorkflowType = WorkflowType.creator_series
@@ -88,6 +89,74 @@ class StoryCreate(BaseModel):
     style_reference_urls: list[str] = Field(default_factory=list)
     character_reference_urls: list[str] = Field(default_factory=list)
     scene_reference_urls: list[str] = Field(default_factory=list)
+    pipeline_config: dict[str, Any] = Field(default_factory=dict)
+
+
+class StoryPipelineConfigUpdate(BaseModel):
+    pipeline_config: dict[str, Any] = Field(default_factory=dict)
+
+
+class StoryUpdate(BaseModel):
+    title: Optional[str] = None
+    prompt: Optional[str] = None
+    genre: Optional[str] = None
+    style: Optional[str] = None
+    synopsis: Optional[str] = None
+    setting: Optional[str] = None
+    themes: Optional[list[str]] = None
+
+
+class StoryAssistantRequest(BaseModel):
+    instruction: str
+    target: str = "story"
+    scene_id: Optional[str] = None
+
+
+class StoryAssistantResponse(BaseModel):
+    target: str
+    message: str
+    story_patch: dict[str, Any] = Field(default_factory=dict)
+    scene_patch: dict[str, Any] = Field(default_factory=dict)
+
+
+class ValidActionResponse(BaseModel):
+    key: str
+    label: str
+    target: str
+    enabled: bool = True
+    requires_confirmation: bool = False
+    reason: Optional[str] = None
+
+
+class StoryCapabilitiesResponse(BaseModel):
+    story_id: str
+    story_status: str
+    selected_scene_id: Optional[str] = None
+    selected_checkpoint_id: Optional[str] = None
+    story_actions: list[ValidActionResponse] = Field(default_factory=list)
+    scene_actions: list[ValidActionResponse] = Field(default_factory=list)
+    checkpoint_actions: list[ValidActionResponse] = Field(default_factory=list)
+    run_actions: list[ValidActionResponse] = Field(default_factory=list)
+
+
+class StoryOperationsAgentRequest(BaseModel):
+    instruction: str
+    scene_id: Optional[str] = None
+    execute: bool = True
+
+
+class StoryOperationsAgentResponse(BaseModel):
+    operation: str
+    target: str
+    message: str
+    allowed: bool = True
+    requires_confirmation: bool = False
+    executed: bool = False
+    reason: Optional[str] = None
+    story_patch: dict[str, Any] = Field(default_factory=dict)
+    scene_patch: dict[str, Any] = Field(default_factory=dict)
+    result: dict[str, Any] = Field(default_factory=dict)
+    valid_actions: list[str] = Field(default_factory=list)
 
 
 class StoryResponse(BaseModel):
@@ -97,6 +166,7 @@ class StoryResponse(BaseModel):
     genre: str
     style: str
     frame_ratio: str = "16:9"
+    requested_video_ratio: str = "16:9"
     num_episodes: int
     num_scenes: int
     status: StoryStatus
@@ -105,6 +175,7 @@ class StoryResponse(BaseModel):
     workflow_version: str = "v1"
     generation_version: str = "v1"
     approval_status: str = "pending_approval"
+    pipeline_config: Optional[dict] = None
     workflow_state: Optional[dict] = None
     episode_plan: Optional[dict] = None
     created_at: datetime

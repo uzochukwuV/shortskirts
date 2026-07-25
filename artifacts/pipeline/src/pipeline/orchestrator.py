@@ -14,6 +14,15 @@ from pipeline.history import (
 )
 from pipeline.job_runtime import update_job
 from pipeline.generation_coordinator import GenerationCoordinatorError, generate_with_coordinator
+from pipeline.pipeline_runtime import (
+    finish_pipeline_run,
+    finish_pipeline_step,
+    pipeline_context_binding,
+    record_pipeline_artifact,
+    start_pipeline_run,
+    start_pipeline_step,
+)
+from pipeline.steps.scene_steps import complete_scene_render_step
 from pipeline.versioning import (
     GENERATION_VERSION,
     IMAGE_MODEL_NAME,
@@ -249,13 +258,30 @@ async def _create_checkpoint(
 
 async def run_story_generation(story_id: str, job_id: str, resume_state: Optional[dict] = None):
     pool = await get_pool()
+    run_id: str | None = None
 
     await update_job(pool, job_id, status="running", started_at=datetime.utcnow(), current_step="Loading story")
 
     try:
-        story = await pool.fetchrow("SELECT * FROM stories WHERE id = $1", story_id)
-        if not story:
+        story_row = await pool.fetchrow("SELECT * FROM stories WHERE id = $1", story_id)
+        if not story_row:
             raise ValueError(f"Story {story_id} not found")
+        story = dict(story_row)
+        story_dict = story
+        workflow_state = _json_loads(story_dict.get("workflow_state")) or {}
+        run_id = await start_pipeline_run(
+            owner_id=str(story_dict["owner_id"]) if story_dict.get("owner_id") else None,
+            story_id=story_id,
+            job_id=job_id,
+            run_type="story_generation" if resume_state is None else "story_generation_resume",
+            config={
+                "workflow_type": story_dict.get("workflow_type"),
+                "workflow_version": story_dict.get("workflow_version"),
+                "generation_version": story_dict.get("generation_version"),
+                "workflow_state": workflow_state,
+                "resume_state": resume_state,
+            },
+        )
 
         await record_story_history(
             pool,
@@ -278,6 +304,14 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
 
         # ── Generate character reference images ───────────────────────────────
         await update_job(pool, job_id, total_steps=total_steps, current_step="Generating character references")
+        character_step_id = await start_pipeline_step(
+            run_id=run_id,
+            story_id=story_id,
+            job_id=job_id,
+            step_key="ensure_character_refs",
+            step_type="media",
+            input={"expected_character_count": len(plan.get("characters", []))},
+        )
         characters = await pool.fetch("SELECT * FROM characters WHERE story_id = $1", story_id)
         char_map: dict = {}
         missing_ref_characters: set[str] = set()
@@ -327,6 +361,13 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
                 missing_ref_characters.add(char_name)
 
             char_map[char_name] = char_dict
+        await finish_pipeline_step(
+            character_step_id,
+            output={
+                "character_count": len(char_map),
+                "missing_character_refs": sorted(missing_ref_characters),
+            },
+        )
         step += 1
 
         is_narrated_image_story = story.get("workflow_type") == "narrated_image_story"
@@ -347,6 +388,7 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
         story_scene_refs = _workflow_refs(story, "scene_reference_urls")
 
         episode_cache: dict[int, str] = {}
+        failed_scene_numbers: list[tuple[int, int, str]] = []
 
         async def get_episode_id(ep_plan: dict) -> str:
             ep_num = ep_plan["episode_number"]
@@ -492,18 +534,35 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
                     "but no usable reference images"
                 )
 
+            render_step_id = await start_pipeline_step(
+                run_id=run_id,
+                story_id=story_id,
+                episode_id=str(ep_id),
+                scene_id=str(scene_id),
+                job_id=job_id,
+                step_key=f"render_scene:{ep_num}:{scene_num}",
+                step_type="scene_render",
+                input={
+                    "episode_number": ep_num,
+                    "scene_number": scene_num,
+                    "media_kind": "image" if is_narrated_image_story else "video",
+                    "character_ref_count": len(char_refs),
+                    "previous_exit_frame": previous_exit_frame,
+                },
+            )
             try:
-                result, generation_plan = await generate_with_coordinator(
-                    story=story,
-                    episode_id=str(ep_id),
-                    scene=scene_plan,
-                    story_context=plan,
-                    character_refs=char_refs,
-                    previous_exit_frame_url=previous_exit_frame,
-                    previous_scene_image_url=previous_exit_frame,
-                    previous_scene_summary=previous_summary,
-                    style=story["style"],
-                )
+                async with pipeline_context_binding(run_id=run_id, step_id=render_step_id):
+                    result, generation_plan = await generate_with_coordinator(
+                        story=story,
+                        episode_id=str(ep_id),
+                        scene=scene_plan,
+                        story_context=plan,
+                        character_refs=char_refs,
+                        previous_exit_frame_url=previous_exit_frame,
+                        previous_scene_image_url=previous_exit_frame,
+                        previous_scene_summary=previous_summary,
+                        style=story["style"],
+                    )
 
                 merged_meta = json.dumps({
                     "title": scene_plan.get("title", f"Scene {scene_num}"),
@@ -594,6 +653,18 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
                             "scene_number": scene_num,
                         },
                     )
+                media_url = await complete_scene_render_step(
+                    run_id=run_id,
+                    step_id=render_step_id,
+                    story_id=story_id,
+                    episode_id=str(ep_id),
+                    scene_id=str(scene_id),
+                    result=result,
+                    generation_plan=generation_plan,
+                    episode_number=ep_num,
+                    scene_number=scene_num,
+                    default_media_kind="image" if is_narrated_image_story else "video",
+                )
 
                 if generation_plan.state_patch:
                     merged_workflow_state = _merge_workflow_state(story, generation_plan.state_patch)
@@ -614,10 +685,65 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
                         "narration": result.get("narration", scene_plan.get("narration", "")),
                     })
                 step += 1
+                if failed_scene_numbers:
+                    await pool.execute("UPDATE stories SET status='failed', updated_at=now() WHERE id=$1", story_id)
+                    failed_story = await pool.fetchrow("SELECT * FROM stories WHERE id=$1", story_id)
+                    if failed_story:
+                        await record_story_history(
+                            pool,
+                            story=failed_story,
+                            event_type="generation_failed",
+                            payload={
+                                "status": failed_story["status"],
+                                "failed_scenes": [
+                                    {"episode_number": ep, "scene_number": sc, "error": err[:300]}
+                                    for ep, sc, err in failed_scene_numbers
+                                ],
+                            },
+                        )
+                    result = {
+                        "story_id": story_id,
+                        "failed_scenes": [
+                            {"episode_number": ep, "scene_number": sc, "error": err[:300]}
+                            for ep, sc, err in failed_scene_numbers
+                        ],
+                    }
+                    if missing_ref_characters:
+                        result["warnings"] = {
+                            "missing_character_refs": sorted(missing_ref_characters),
+                        }
+                    await update_job(
+                        pool,
+                        job_id,
+                        status="failed",
+                        progress=step,
+                        current_step="Generation failed",
+                        completed_at=datetime.utcnow(),
+                        result=result,
+                    )
+                    if run_id:
+                        await finish_pipeline_run(
+                            run_id,
+                            status="failed",
+                            summary=result,
+                            error="One or more scenes failed",
+                        )
+                    return result
 
             except GenerationCoordinatorError as e:
                 print(f"[orchestrator] Coordinator handoff for scene {scene_num}: {e}")
+                await finish_pipeline_step(
+                    render_step_id,
+                    status="failed",
+                    error=str(e),
+                    output={
+                        "episode_number": ep_num,
+                        "scene_number": scene_num,
+                        "generation_coordinator": e.plan.model_dump() if e.plan else None,
+                    },
+                )
                 await pool.execute("UPDATE scenes SET status='failed' WHERE id=$1", scene_id)
+                failed_scene_numbers.append((ep_num, scene_num, str(e)))
                 failed_scene = await pool.fetchrow("SELECT * FROM scenes WHERE id=$1", scene_id)
                 if failed_scene:
                     await record_scene_history(
@@ -633,9 +759,62 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
                         },
                     )
                 step += 1
+                await pool.execute("UPDATE stories SET status='failed', updated_at=now() WHERE id=$1", story_id)
+                failed_story = await pool.fetchrow("SELECT * FROM stories WHERE id=$1", story_id)
+                if failed_story:
+                    await record_story_history(
+                        pool,
+                        story=failed_story,
+                        event_type="generation_failed",
+                        payload={
+                            "status": failed_story["status"],
+                            "failed_scenes": [
+                                {"episode_number": ep, "scene_number": sc, "error": err[:300]}
+                                for ep, sc, err in failed_scene_numbers
+                            ],
+                        },
+                    )
+                result = {
+                    "story_id": story_id,
+                    "failed_scenes": [
+                        {"episode_number": ep, "scene_number": sc, "error": err[:300]}
+                        for ep, sc, err in failed_scene_numbers
+                    ],
+                }
+                if missing_ref_characters:
+                    result["warnings"] = {
+                        "missing_character_refs": sorted(missing_ref_characters),
+                    }
+                await update_job(
+                    pool,
+                    job_id,
+                    status="failed",
+                    progress=step,
+                    current_step="Generation failed",
+                    completed_at=datetime.utcnow(),
+                    result=result,
+                )
+                if run_id:
+                    await finish_pipeline_run(
+                        run_id,
+                        status="failed",
+                        summary=result,
+                        error=str(e),
+                    )
+                return result
             except Exception as e:
                 print(f"[orchestrator] Scene {scene_num} failed: {e}")
+                await finish_pipeline_step(
+                    render_step_id,
+                    status="failed",
+                    error=str(e),
+                    output={
+                        "episode_number": ep_num,
+                        "scene_number": scene_num,
+                    },
+                )
                 await pool.execute("UPDATE scenes SET status='failed' WHERE id=$1", scene_id)
+                failed_scene_numbers.append((ep_num, scene_num, str(e)))
                 failed_scene = await pool.fetchrow("SELECT * FROM scenes WHERE id=$1", scene_id)
                 if failed_scene:
                     await record_scene_history(
@@ -650,12 +829,97 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
                         },
                     )
                 step += 1
+                await pool.execute("UPDATE stories SET status='failed', updated_at=now() WHERE id=$1", story_id)
+                failed_story = await pool.fetchrow("SELECT * FROM stories WHERE id=$1", story_id)
+                if failed_story:
+                    await record_story_history(
+                        pool,
+                        story=failed_story,
+                        event_type="generation_failed",
+                        payload={
+                            "status": failed_story["status"],
+                            "failed_scenes": [
+                                {"episode_number": ep, "scene_number": sc, "error": err[:300]}
+                                for ep, sc, err in failed_scene_numbers
+                            ],
+                        },
+                    )
+                result = {
+                    "story_id": story_id,
+                    "failed_scenes": [
+                        {"episode_number": ep, "scene_number": sc, "error": err[:300]}
+                        for ep, sc, err in failed_scene_numbers
+                    ],
+                }
+                if missing_ref_characters:
+                    result["warnings"] = {
+                        "missing_character_refs": sorted(missing_ref_characters),
+                    }
+                await update_job(
+                    pool,
+                    job_id,
+                    status="failed",
+                    progress=step,
+                    current_step="Generation failed",
+                    completed_at=datetime.utcnow(),
+                    result=result,
+                )
+                if run_id:
+                    await finish_pipeline_run(
+                        run_id,
+                        status="failed",
+                        summary=result,
+                        error=str(e),
+                    )
+                return result
 
             next_item = scene_sequence[idx + 1] if idx + 1 < len(scene_sequence) else None
             episode_finished = next_item is None or next_item[0]["episode_number"] != ep_num
             if episode_finished:
                 await update_job(pool, job_id, progress=step, current_step=f"Assembling Episode {ep_num}")
-                await _assemble_episode(pool, story_id, ep_id, ep_num, is_narrated_image_story)
+                assembly_step_id = await start_pipeline_step(
+                    run_id=run_id,
+                    story_id=story_id,
+                    episode_id=str(ep_id),
+                    job_id=job_id,
+                    step_key=f"assemble_episode:{ep_num}",
+                    step_type="assembly",
+                    input={"episode_number": ep_num, "narrated": is_narrated_image_story},
+                )
+                try:
+                    await _assemble_episode(pool, story_id, ep_id, ep_num, is_narrated_image_story)
+                except Exception as e:
+                    await finish_pipeline_step(
+                        assembly_step_id,
+                        status="failed",
+                        error=str(e),
+                        output={"episode_number": ep_num},
+                    )
+                    raise
+                episode_row = await pool.fetchrow("SELECT * FROM episodes WHERE id=$1", ep_id)
+                await finish_pipeline_step(
+                    assembly_step_id,
+                    output={
+                        "episode_number": ep_num,
+                        "status": episode_row["status"] if episode_row else None,
+                        "assembled_video_url": episode_row["assembled_video_url"] if episode_row else None,
+                        "manifest_url": episode_row["manifest_url"] if episode_row else None,
+                    },
+                )
+                if episode_row and episode_row["assembled_video_url"]:
+                    await record_pipeline_artifact(
+                        run_id=run_id,
+                        step_id=assembly_step_id,
+                        story_id=story_id,
+                        episode_id=str(ep_id),
+                        artifact_type="assembled_episode",
+                        media_kind="video",
+                        url=episode_row["assembled_video_url"],
+                        metadata={
+                            "episode_number": ep_num,
+                            "manifest_url": episode_row["manifest_url"],
+                        },
+                    )
 
             if (
                 is_narrated_image_story
@@ -789,6 +1053,12 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
                     completed_at=datetime.utcnow(),
                     result=result,
                 )
+                if run_id:
+                    await finish_pipeline_run(
+                        run_id,
+                        status="waiting_for_approval",
+                        summary=result,
+                    )
                 return result
 
         await pool.execute("UPDATE stories SET status='completed' WHERE id=$1", story_id)
@@ -813,9 +1083,13 @@ async def run_story_generation(story_id: str, job_id: str, resume_state: Optiona
             completed_at=datetime.utcnow(),
             result=result,
         )
+        if run_id:
+            await finish_pipeline_run(run_id, status="completed", summary=result)
         return result
     except Exception as e:
         print(f"[orchestrator] Story generation failed: {e}")
+        if run_id:
+            await finish_pipeline_run(run_id, status="failed", error=str(e))
         failed_story = await pool.fetchrow("SELECT * FROM stories WHERE id=$1", story_id)
         if failed_story:
             await record_story_history(

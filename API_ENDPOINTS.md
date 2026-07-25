@@ -44,11 +44,38 @@ So: yes, users can steer `9:16` or `16:9`, but in practice this is done through 
 ### `GenerationJobResponse`
 `{ id, entity_type, entity_id, status, progress, total_steps, current_step, error, result, started_at, completed_at, created_at, job_type, attempts, max_attempts, worker_id, leased_at, lease_expires_at, last_heartbeat_at, updated_at }`
 
+### `PipelineRunResponse`
+`{ id, owner_id, story_id, job_id, run_type, status, config, summary, error, started_at, completed_at, created_at, updated_at }`
+
+### `PipelineConfig`
+`{ media: { kind, ratio, duration_seconds, quality }, approvals: { outline_required, checkpoint_batch_size, publish_requires_approval }, providers: { video_preference, image_preference, allow_fallback_to_image }, continuity: { use_character_refs, use_previous_exit_frame, max_reference_images } }`
+
+### `PipelineStepResponse`
+`{ id, run_id, parent_step_id, story_id, episode_id, scene_id, job_id, step_key, step_type, status, attempt, provider, provider_model, provider_task_id, provider_request_id, input, output, error, started_at, completed_at, created_at, updated_at }`
+
+### `PipelineArtifactResponse`
+`{ id, run_id, step_id, story_id, episode_id, scene_id, artifact_type, media_kind, url, content, metadata, created_at }`
+
 ### `GenerationCheckpointResponse`
 `{ id, story_id, job_id, resume_job_id, batch_number, batch_size, start_episode_number, start_scene_number, end_episode_number, end_scene_number, status, generation_version, narration_model, narration_voice, narration_text, audio_job_id, audio_status, narration_audio_url, narration_audio_manifest_url, state_snapshot, resume_state, reviewer_notes, approved_at, reviewed_at, created_at, updated_at }`
 
 ### `GalleryItemResponse`
 `{ id, kind, media_kind, story_id, story_title, episode_id, episode_number, scene_id, scene_number, title, summary, media_url, duration, created_at }`
+
+### `SocialAccountResponse`
+`{ id, platform, platform_user_id, display_name, scopes, status, metadata, token_expires_at, created_at, updated_at }`
+
+### `PublishTargetResponse`
+`{ id, platform, social_account_id, story_id, episode_id, scene_id, artifact_id, asset_kind, media_url, title, description, tags, privacy_status, publish_mode, requires_approval, approved_at, scheduled_for, status, error, metadata, created_at, updated_at }`
+
+### `PublishPostResponse`
+`{ id, publish_target_id, platform, platform_post_id, public_url, upload_session_id, status, response, error, created_at, updated_at }`
+
+### `ScheduleResponse`
+`{ id, story_id, name, schedule_type, cadence, cadence_config, timezone, next_run_at, enabled, pipeline_config, publish_config, approval_policy, status, last_run_at, last_error, created_at, updated_at }`
+
+### `ScheduledRunResponse`
+`{ id, schedule_id, story_id, episode_id, publish_target_id, job_id, run_type, due_at, status, result, error, started_at, completed_at, created_at, updated_at }`
 
 ## Auth endpoints
 
@@ -104,6 +131,218 @@ No body required.
 
 Returns:
 `GenerationJobResponse`
+
+### `PUT /pipeline/stories/{story_id}/pipeline-config`
+Request:
+`{ pipeline_config: PipelineConfig }`
+
+Returns:
+`StoryResponse`
+
+## Pipeline run debug endpoints
+
+### `GET /pipeline/runs/story/{story_id}`
+Returns recent pipeline runs for a story.
+
+Returns:
+`PipelineRunResponse[]`
+
+### `GET /pipeline/runs/{run_id}`
+Returns one run with ordered steps and artifacts.
+
+Returns:
+`{ run: PipelineRunResponse, steps: PipelineStepResponse[], artifacts: PipelineArtifactResponse[] }`
+
+### `GET /pipeline/runs/{run_id}/steps`
+Returns:
+`PipelineStepResponse[]`
+
+### `GET /pipeline/runs/{run_id}/artifacts`
+Returns:
+`PipelineArtifactResponse[]`
+
+### `GET /pipeline/runs/steps/{step_id}`
+Returns:
+`PipelineStepResponse`
+
+### `POST /pipeline/runs/steps/{step_id}/retry`
+Queues scene regeneration from a failed `scene_render` step or a failed `provider_attempt` child step.
+
+Returns:
+`GenerationJobResponse`
+
+### `POST /pipeline/runs/{run_id}/cancel`
+Cancels a pending/running pipeline run and its attached generation job when present.
+
+Returns:
+`{ run: PipelineRunResponse, steps: PipelineStepResponse[], artifacts: PipelineArtifactResponse[] }`
+
+## Social account endpoints
+
+### `GET /pipeline/social/accounts`
+Returns connected and disconnected social accounts for the signed-in user.
+
+Returns:
+`SocialAccountResponse[]`
+
+### `POST /pipeline/social/accounts/mock`
+Creates a mock social account for local smoke tests.
+
+Request:
+`{ platform: "mock", platform_user_id?, display_name?, scopes?, metadata? }`
+
+Returns:
+`SocialAccountResponse`
+
+### `POST /pipeline/social/{platform}/connect`
+Starts OAuth for `youtube` or `tiktok`.
+
+Returns:
+`{ authorization_url, state }`
+
+### `GET /pipeline/social/youtube/callback`
+OAuth callback used by Google. Stores encrypted access/refresh tokens and channel identity.
+
+Query:
+`{ code, state }`
+
+Returns:
+`{ ok, platform, display_name }`
+
+### `GET /pipeline/social/tiktok/callback`
+OAuth callback used by TikTok. Stores encrypted access/refresh tokens and account identity.
+
+Query:
+`{ code, state }`
+
+Returns:
+`{ ok, platform }`
+
+### `DELETE /pipeline/social/accounts/{account_id}`
+Marks the social account disconnected.
+
+Returns:
+`{ ok: true }`
+
+## Publishing endpoints
+
+### `POST /pipeline/publish-targets`
+Creates a publish target for an assembled episode, generated scene, pipeline artifact, or direct external URL.
+
+Request:
+`{ platform, social_account_id?, story_id?, episode_id?, scene_id?, artifact_id?, asset_kind, media_url?, title, description?, tags?, privacy_status?, publish_mode?, requires_approval?, scheduled_for?, metadata? }`
+
+Returns:
+`PublishTargetResponse`
+
+### `GET /pipeline/publish-targets`
+Returns:
+`PublishTargetResponse[]`
+
+### `GET /pipeline/publish-targets/{target_id}`
+Returns:
+`PublishTargetResponse & { posts: PublishPostResponse[] }`
+
+### `POST /pipeline/publish-targets/{target_id}/approve`
+Approves a target that was created with `requires_approval=true`.
+
+Returns:
+`PublishTargetResponse`
+
+### `POST /pipeline/publish-targets/{target_id}/publish-now`
+Resolves media, queues a `publish_target` job, and returns its job id.
+
+Returns:
+`{ job_id, publish_target_id }`
+
+### `POST /pipeline/publish-targets/{target_id}/retry`
+Queues a new publish job for a failed/canceled target.
+
+Returns:
+`{ job_id, publish_target_id }`
+
+### `POST /pipeline/publish-targets/{target_id}/cancel`
+Cancels a target that has not already been published or handed to a platform processor.
+
+Returns:
+`PublishTargetResponse`
+
+## Schedule endpoints
+
+### `POST /pipeline/schedules`
+Creates an automation schedule.
+
+Supported `schedule_type`:
+- `generate_only`
+- `publish_existing`
+- `generate_and_publish`
+- `series_continuation`
+
+Supported `cadence`:
+- `once`
+- `interval_hours`
+- `daily`
+- `weekly`
+
+Request:
+`{ name, schedule_type, story_id?, cadence?, cadence_config?, timezone?, next_run_at?, enabled?, pipeline_config?, publish_config?, approval_policy? }`
+
+Returns:
+`ScheduleResponse`
+
+### `GET /pipeline/schedules`
+Returns:
+`ScheduleResponse[]`
+
+### `GET /pipeline/schedules/{schedule_id}`
+Returns:
+`ScheduleResponse`
+
+### `PATCH /pipeline/schedules/{schedule_id}`
+Request:
+Partial `ScheduleResponse` fields.
+
+Returns:
+`ScheduleResponse`
+
+### `DELETE /pipeline/schedules/{schedule_id}`
+Returns:
+`{ ok: true }`
+
+### `POST /pipeline/schedules/{schedule_id}/run-now`
+Queues the schedule immediately.
+
+Returns:
+`{ scheduled_run: ScheduledRunResponse }`
+
+### `POST /pipeline/schedules/dispatch-due`
+Queues due schedules for the signed-in user. Production can also run `python src/scheduler.py` as a polling process.
+
+Returns:
+`{ queued: [{ schedule_id, job_id, job_type }] }`
+
+### `GET /pipeline/schedules/{schedule_id}/runs`
+Returns:
+`ScheduledRunResponse[]`
+
+## Social publishing environment
+
+Required for all real social publishing:
+- `SOCIAL_TOKEN_ENCRYPTION_KEY`
+- `PUBLIC_BACKEND_URL`
+- `FRONTEND_URL`
+
+YouTube:
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- YouTube Data API enabled
+- OAuth redirect URI: `{PUBLIC_BACKEND_URL}/pipeline/social/youtube/callback`
+
+TikTok:
+- `TIKTOK_CLIENT_KEY`
+- `TIKTOK_CLIENT_SECRET`
+- Content Posting API approval for `video.upload` and/or `video.publish`
+- OAuth redirect URI: `{PUBLIC_BACKEND_URL}/pipeline/social/tiktok/callback`
 
 ### `POST /pipeline/stories/{story_id}/checkpoints/{checkpoint_id}/audio/regenerate`
 Request:

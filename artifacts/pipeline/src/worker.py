@@ -11,6 +11,8 @@ from job_queue import (
     WORKLOAD_ALL,
     WORKLOAD_AUDIO,
     WORKLOAD_MEDIA,
+    WORKLOAD_PUBLISH,
+    WORKLOAD_SCHEDULER,
     WORKLOAD_STORY,
     blpop_job,
     claim_job,
@@ -25,7 +27,13 @@ from job_queue import (
 )
 from pipeline.metrics import record_pipeline_metric
 from pipeline.history import record_checkpoint_history, record_scene_history, record_story_history
-from pipeline.job_handlers import run_character_ref_job, run_checkpoint_audio_job, run_scene_regen_job
+from pipeline.job_handlers import (
+    run_character_ref_job,
+    run_checkpoint_audio_job,
+    run_publish_target_job,
+    run_scene_regen_job,
+    run_scheduled_job,
+)
 from pipeline.runtime_context import job_context
 from pipeline.orchestrator import run_story_generation
 
@@ -75,6 +83,15 @@ async def _run_handler(pool, row: dict, worker_id: str):
         return await run_character_ref_job(str(row["entity_id"]), str(row["id"]), worker_id)
     if entity_type == "scene" or job_type == "scene_regen":
         return await run_scene_regen_job(str(row["entity_id"]), str(row["id"]), worker_id)
+    if entity_type == "publish" or job_type in {"publish_episode", "publish_target"}:
+        return await run_publish_target_job(str(row["entity_id"]), str(row["id"]), worker_id)
+    if entity_type == "schedule" or job_type in {
+        "scheduled_generate_only",
+        "scheduled_publish_existing",
+        "scheduled_generate_and_publish",
+        "scheduled_series_continuation",
+    }:
+        return await run_scheduled_job(str(row["entity_id"]), str(row["id"]), worker_id)
     raise RuntimeError(f"Unsupported job type: {entity_type}/{job_type}")
 
 
@@ -213,10 +230,14 @@ async def main():
         f"[worker:{WORKER_WORKLOAD}] started worker_id={worker_id} lease={LEASE_SECONDS}s heartbeat={HEARTBEAT_SECONDS}s"
     )
 
-    if WORKER_WORKLOAD not in {WORKLOAD_STORY, WORKLOAD_MEDIA, WORKLOAD_AUDIO, WORKLOAD_ALL}:
+    if WORKER_WORKLOAD not in {WORKLOAD_STORY, WORKLOAD_MEDIA, WORKLOAD_AUDIO, WORKLOAD_PUBLISH, WORKLOAD_SCHEDULER, WORKLOAD_ALL}:
         raise RuntimeError(f"Unsupported WORKER_WORKLOAD={WORKER_WORKLOAD}")
 
-    workloads = [WORKLOAD_STORY, WORKLOAD_MEDIA, WORKLOAD_AUDIO] if WORKER_WORKLOAD == WORKLOAD_ALL else [WORKER_WORKLOAD]
+    workloads = (
+        [WORKLOAD_STORY, WORKLOAD_MEDIA, WORKLOAD_AUDIO, WORKLOAD_PUBLISH, WORKLOAD_SCHEDULER]
+        if WORKER_WORKLOAD == WORKLOAD_ALL
+        else [WORKER_WORKLOAD]
+    )
 
     for workload in workloads:
         for job_id in await recover_expired_jobs(pool, workload):

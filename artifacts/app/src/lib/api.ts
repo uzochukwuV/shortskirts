@@ -266,6 +266,104 @@ export type UploadResponse = {
   size: number;
 };
 
+export type StoryAssistantResponse = {
+  target: "story" | "scene";
+  message: string;
+  story_patch: Record<string, any>;
+  scene_patch: Record<string, any>;
+};
+
+export type SocialAccount = {
+  id: string;
+  platform: "mock" | "youtube" | "tiktok";
+  platform_user_id?: string | null;
+  display_name?: string | null;
+  scopes: string[];
+  status: string;
+  metadata: Record<string, any>;
+  token_expires_at?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PublishTarget = {
+  id: string;
+  platform: "mock" | "youtube" | "tiktok";
+  social_account_id?: string | null;
+  story_id?: string | null;
+  episode_id?: string | null;
+  scene_id?: string | null;
+  artifact_id?: string | null;
+  asset_kind: "episode" | "scene" | "artifact" | "external_url";
+  media_url?: string | null;
+  title: string;
+  description: string;
+  tags: string[];
+  privacy_status: string;
+  publish_mode: "manual" | "scheduled" | "auto_after_generation";
+  requires_approval: boolean;
+  approved_at?: string | null;
+  scheduled_for?: string | null;
+  status: string;
+  error?: string | null;
+  metadata: Record<string, any>;
+  created_at: string;
+  updated_at: string;
+  posts?: PublishPost[];
+};
+
+export type PublishPost = {
+  id: string;
+  publish_target_id: string;
+  platform: string;
+  platform_post_id?: string | null;
+  public_url?: string | null;
+  upload_session_id?: string | null;
+  status: string;
+  response: Record<string, any>;
+  error?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AutomationSchedule = {
+  id: string;
+  story_id?: string | null;
+  name: string;
+  schedule_type: "generate_only" | "publish_existing" | "generate_and_publish" | "series_continuation";
+  cadence: "once" | "interval_hours" | "daily" | "weekly";
+  cadence_config: Record<string, any>;
+  timezone: string;
+  next_run_at?: string | null;
+  enabled: boolean;
+  pipeline_config: Record<string, any>;
+  publish_config: Record<string, any>;
+  approval_policy: "require_approval" | "auto_publish" | "generate_only";
+  status: string;
+  last_run_at?: string | null;
+  last_error?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ScheduledRun = {
+  id: string;
+  schedule_id?: string | null;
+  story_id?: string | null;
+  episode_id?: string | null;
+  publish_target_id?: string | null;
+  job_id?: string | null;
+  run_type: string;
+  due_at?: string | null;
+  status: string;
+  result: Record<string, any>;
+  error?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 function resolvePipelineBase() {
   const explicit = import.meta.env.VITE_PIPELINE_API_BASE?.trim()?.replace(/\/+$/, "");
   if (explicit) return explicit;
@@ -371,6 +469,20 @@ export const api = {
 
   getStories: () => req<Story[]>(`${BASE}/stories`),
   getStory: (id: string) => req<Story>(`${BASE}/stories/${id}`),
+  updateStory: (
+    id: string,
+    data: Partial<{
+      title: string;
+      prompt: string;
+      genre: string;
+      style: string;
+      synopsis: string;
+      setting: string;
+      themes: string[];
+    }>,
+  ) => req<Story>(`${BASE}/stories/${id}`, put(data)),
+  assistStory: (id: string, data: { instruction: string; target?: "story" | "scene"; scene_id?: string }) =>
+    req<StoryAssistantResponse>(`${BASE}/stories/${id}/assistant`, json(data)),
   createStory: (data: {
     title: string;
     prompt: string;
@@ -402,6 +514,27 @@ export const api = {
   rejectScene: (id: string) => req<Scene>(`${BASE}/scenes/${id}/reject`, put()),
   lockScene: (id: string) => req<Scene>(`${BASE}/scenes/${id}/lock`, put()),
   regenerateScene: (id: string) => req<GenerationJob>(`${BASE}/scenes/${id}/regenerate`, json({})),
+  updateScene: (
+    id: string,
+    data: Partial<{
+      prompt: string;
+      title: string;
+      description: string;
+      visual_prompt: string;
+      mood: string;
+      location: string;
+      action: string;
+      narration: string;
+      duration: number;
+      media_kind: string;
+      frame_ratio: string;
+      character_ids: string[];
+      primary_character_ids: string[];
+      reference_image_urls: string[];
+      approval_status: string;
+      locked: boolean;
+    }>,
+  ) => req<Scene>(`${BASE}/scenes/${id}`, put(data)),
   updateSceneReferences: (id: string, reference_image_urls: string[]) =>
     req<Scene>(`${BASE}/scenes/${id}/references`, json({ reference_image_urls })),
 
@@ -431,6 +564,37 @@ export const api = {
     }
     return res.json() as Promise<UploadResponse>;
   },
+
+  getSocialAccounts: () => req<SocialAccount[]>(`${BASE}/social/accounts`),
+  createMockSocialAccount: (data: Partial<SocialAccount> = {}) =>
+    req<SocialAccount>(`${BASE}/social/accounts/mock`, json({ platform: "mock", ...data })),
+  startSocialConnect: (platform: "youtube" | "tiktok") =>
+    req<{ authorization_url: string; state: string }>(`${BASE}/social/${platform}/connect`, { method: "POST" }),
+  disconnectSocialAccount: (accountId: string) => req<{ ok: boolean }>(`${BASE}/social/accounts/${accountId}`, { method: "DELETE" }),
+
+  createPublishTarget: (data: Partial<PublishTarget> & { platform: "mock" | "youtube" | "tiktok"; title: string }) =>
+    req<PublishTarget>(`${BASE}/publish-targets`, json(data)),
+  getPublishTargets: () => req<PublishTarget[]>(`${BASE}/publish-targets`),
+  getPublishTarget: (targetId: string) => req<PublishTarget>(`${BASE}/publish-targets/${targetId}`),
+  approvePublishTarget: (targetId: string) => req<PublishTarget>(`${BASE}/publish-targets/${targetId}/approve`, { method: "POST" }),
+  publishNow: (targetId: string) => req<{ job_id: string; publish_target_id: string }>(`${BASE}/publish-targets/${targetId}/publish-now`, { method: "POST" }),
+  retryPublishTarget: (targetId: string) => req<{ job_id: string; publish_target_id: string }>(`${BASE}/publish-targets/${targetId}/retry`, { method: "POST" }),
+  cancelPublishTarget: (targetId: string) => req<PublishTarget>(`${BASE}/publish-targets/${targetId}/cancel`, { method: "POST" }),
+
+  createSchedule: (data: Partial<AutomationSchedule> & { name: string; schedule_type: AutomationSchedule["schedule_type"] }) =>
+    req<AutomationSchedule>(`${BASE}/schedules`, json(data)),
+  getSchedules: () => req<AutomationSchedule[]>(`${BASE}/schedules`),
+  getSchedule: (scheduleId: string) => req<AutomationSchedule>(`${BASE}/schedules/${scheduleId}`),
+  updateSchedule: (scheduleId: string, data: Partial<AutomationSchedule>) =>
+    req<AutomationSchedule>(`${BASE}/schedules/${scheduleId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  deleteSchedule: (scheduleId: string) => req<{ ok: boolean }>(`${BASE}/schedules/${scheduleId}`, { method: "DELETE" }),
+  runScheduleNow: (scheduleId: string) => req<{ scheduled_run: ScheduledRun }>(`${BASE}/schedules/${scheduleId}/run-now`, { method: "POST" }),
+  dispatchDueSchedules: () => req<{ queued: Array<Record<string, any>> }>(`${BASE}/schedules/dispatch-due`, { method: "POST" }),
+  getScheduleRuns: (scheduleId: string) => req<ScheduledRun[]>(`${BASE}/schedules/${scheduleId}/runs`),
 
   adminLogin: (data: { email: string; password: string }) => adminReq<AdminAuthResponse>(`${BASE}/admin/login`, json(data)),
   adminMe: () => adminReq<AdminProfile>(`${BASE}/admin/me`),

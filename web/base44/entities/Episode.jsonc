@@ -1,0 +1,61 @@
+{
+  "name": "Episode",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string"
+    },
+    "series_id": {
+      "type": "string"
+    },
+    "episode_number": {
+      "type": "number",
+      "default": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "in_review",
+        "approved",
+        "published"
+      ],
+      "default": "draft"
+    },
+    "synopsis": {
+      "type": "string"
+    },
+    "duration_seconds": {
+      "type": "number",
+      "default": 0
+    },
+    "scheduled_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "views": {
+      "type": "number",
+      "default": 0
+    },
+    "engagement_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "likes": {
+      "type": "number",
+      "default": 0
+    },
+    "comments": {
+      "type": "number",
+      "default": 0
+    },
+    "shares": {
+      "type": "number",
+      "default": 0
+    }
+  },
+  "required": [
+    "title",
+    "series_id"
+  ]
+}

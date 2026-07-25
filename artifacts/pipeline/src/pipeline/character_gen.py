@@ -109,54 +109,60 @@ async def _try_qwen_image_plus(prompt: str) -> Optional[bytes]:
         return None
 
     endpoint = f"{QWEN_IMAGE_BASE}/services/aigc/multimodal-generation/generation"
-    payload = {
-        "model": "qwen-image-plus",
-        "input": {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [{"text": prompt}],
-                }
-            ]
-        },
-        "parameters": {"n": 1, "watermark": False},
-    }
+    models = [
+        os.getenv("QWEN_IMAGE_MODEL", "qwen-image-plus"),
+        "qwen-image",
+    ]
+    for model in list(dict.fromkeys([m for m in models if m])):
+        payload = {
+            "model": model,
+            "input": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"text": prompt}],
+                    }
+                ]
+            },
+            "parameters": {"n": 1, "watermark": False},
+        }
 
-    try:
-        async with httpx.AsyncClient(timeout=120) as http:
-            data = await run_provider_step(
-                "dashscope_image",
-                "image:qwen-image-plus",
-                lambda: _post_json(
-                    http,
-                    endpoint,
-                    headers={
-                        "Authorization": f"Bearer {dashscope_key}",
-                        "Content-Type": "application/json",
+        try:
+            async with httpx.AsyncClient(timeout=120) as http:
+                data = await run_provider_step(
+                    "dashscope_image",
+                    f"image:{model}",
+                    lambda: _post_json(
+                        http,
+                        endpoint,
+                        headers={
+                            "Authorization": f"Bearer {dashscope_key}",
+                            "Content-Type": "application/json",
+                        },
+                        payload=payload,
+                    ),
+                    extra={"model": model},
+                    extra_builder=lambda result: {
+                        "model": model,
+                        "task_id": result.get("output", {}).get("task_id") or result.get("task_id") or result.get("id"),
                     },
-                    payload=payload,
-                ),
-                extra={"model": "qwen-image-plus"},
-                extra_builder=lambda result: {
-                    "model": "qwen-image-plus",
-                    "task_id": result.get("output", {}).get("task_id") or result.get("task_id") or result.get("id"),
-                },
-            )
+                )
 
-        image_url = _extract_image_url(data)
-        if not image_url:
-            raise RuntimeError(f"qwen-image-plus succeeded but no image URL: {data}")
-        async with httpx.AsyncClient(timeout=60) as http:
-            img_r = await run_provider_step(
-                "dashscope_image",
-                "image:qwen-image-plus:download",
-                lambda: http.get(image_url, follow_redirects=True),
-                extra={"model": "qwen-image-plus"},
-            )
-            return img_r.content
-    except Exception as e:
-        print(f"[character_gen] qwen-image-plus failed: {str(e)[:120]}")
-        return None
+            image_url = _extract_image_url(data)
+            if not image_url:
+                raise RuntimeError(f"{model} succeeded but no image URL: {data}")
+            async with httpx.AsyncClient(timeout=60) as http:
+                img_r = await run_provider_step(
+                    "dashscope_image",
+                    f"image:{model}:download",
+                    lambda: http.get(image_url, follow_redirects=True),
+                    extra={"model": model},
+                )
+                return img_r.content
+        except Exception as e:
+            print(f"[character_gen] {model} failed: {str(e)[:120]}")
+            continue
+    return None
 
 
 async def _try_qwen_image_edit_max(prompt: str, reference_image_urls: list[str]) -> Optional[bytes]:

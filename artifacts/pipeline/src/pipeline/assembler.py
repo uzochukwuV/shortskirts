@@ -1,14 +1,11 @@
 import os
-import io
 import json
-import uuid
 import tempfile
-import asyncio
 import httpx
 from datetime import datetime
-from typing import Optional
 
 from storage.b2 import upload_bytes, build_key
+from pipeline.media_tools import concatenate_video_files
 
 
 async def assemble_episode(
@@ -37,18 +34,11 @@ async def assemble_episode(
             clip_paths.append(tmp.name)
             tmp_files.append(tmp.name)
 
-        from moviepy.editor import VideoFileClip, concatenate_videoclips
-        clips = [VideoFileClip(p) for p in clip_paths]
-        final = concatenate_videoclips(clips, method="compose")
-
         out_tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
         out_tmp.close()
         tmp_files.append(out_tmp.name)
 
-        final.write_videofile(out_tmp.name, codec="libx264", audio_codec="aac", logger=None)
-        for c in clips:
-            c.close()
-        final.close()
+        await concatenate_video_files(clip_paths, out_tmp.name)
 
         with open(out_tmp.name, "rb") as f:
             assembled_bytes = f.read()

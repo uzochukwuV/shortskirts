@@ -24,7 +24,7 @@ export function Layout({ children }: { children: ReactNode }) {
               <Sparkles className="h-4 w-4" />
             </div>
             <div className="leading-none">
-              <div className="text-[15px] font-semibold tracking-tight">StoryForge</div>
+              <div className="text-[15px] font-semibold tracking-tight">Dysentry</div>
               <div className="text-[11px] text-muted-foreground">production workspace</div>
             </div>
           </Link>
@@ -98,7 +98,7 @@ export function Layout({ children }: { children: ReactNode }) {
                   <Clapperboard className="h-4 w-4" />
                 </div>
                 <div>
-                  <div className="text-sm font-semibold">StoryForge</div>
+                  <div className="text-sm font-semibold">Dysentry</div>
                   <div className="text-[11px] text-muted-foreground">production workspace</div>
                 </div>
               </div>

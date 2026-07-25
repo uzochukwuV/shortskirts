@@ -15,7 +15,12 @@ from routes.bibles     import router as bibles_router
 from routes.uploads    import router as uploads_router
 from routes.jobs       import router as jobs_router
 from routes.admin      import router as admin_router
+from routes.pipeline_runs import router as pipeline_runs_router
+from routes.publish    import router as publish_router
+from routes.schedules  import router as schedules_router
+from routes.social     import router as social_router
 from auth              import router as auth_router
+from pipeline.media_tools import ffmpeg_available, ffmpeg_path
 
 
 @asynccontextmanager
@@ -53,11 +58,23 @@ app.include_router(bibles_router)
 app.include_router(uploads_router)
 app.include_router(jobs_router)
 app.include_router(admin_router)
+app.include_router(pipeline_runs_router)
+app.include_router(social_router)
+app.include_router(publish_router)
+app.include_router(schedules_router)
 
 
 @app.get("/pipeline/health")
 async def health():
-    return {"status": "ok", "service": "storyforge-anime-pipeline", "version": "2.0.0"}
+    return {
+        "status": "ok",
+        "service": "storyforge-anime-pipeline",
+        "version": "2.0.0",
+        "media": {
+            "ffmpeg_available": ffmpeg_available(),
+            "ffmpeg_path": ffmpeg_path(),
+        },
+    }
 
 
 @app.get("/pipeline")
@@ -77,11 +94,15 @@ async def root():
                 "POST   /pipeline/stories",
                 "GET    /pipeline/stories",
                 "GET    /pipeline/stories/{id}",
+                "GET    /pipeline/stories/{id}/capabilities",
+                "POST   /pipeline/stories/{id}/operations-agent",
                 "PUT    /pipeline/stories/{id}/approve-outline",
+                "POST   /pipeline/stories/{id}/regenerate-outline",
                 "POST   /pipeline/stories/{id}/generate",
                 "GET    /pipeline/stories/{story_id}/checkpoints",
                 "PUT    /pipeline/stories/{story_id}/checkpoints/{checkpoint_id}/approve",
                 "POST   /pipeline/stories/{story_id}/checkpoints/{checkpoint_id}/audio/regenerate",
+                "PUT    /pipeline/stories/{story_id}/pipeline-config",
                 "GET    /pipeline/stories/{story_id}/history",
                 "GET    /pipeline/stories/{story_id}/checkpoints/{checkpoint_id}/history",
             ],
@@ -90,6 +111,15 @@ async def root():
             ],
             "providers": [
                 "GET    /pipeline/providers/status",
+            ],
+            "pipeline_runs": [
+                "GET    /pipeline/runs/story/{story_id}",
+                "GET    /pipeline/runs/{run_id}",
+                "GET    /pipeline/runs/{run_id}/steps",
+                "GET    /pipeline/runs/{run_id}/artifacts",
+                "GET    /pipeline/runs/steps/{step_id}",
+                "POST   /pipeline/runs/steps/{step_id}/retry",
+                "POST   /pipeline/runs/{run_id}/cancel",
             ],
             "bibles": [
                 "POST   /pipeline/bibles",
@@ -129,6 +159,32 @@ async def root():
                 "GET    /pipeline/jobs/entity/{type}/{entity_id}",
                 "POST   /pipeline/jobs/{id}/cancel",
                 "POST   /pipeline/jobs/{id}/retry",
+            ],
+            "social": [
+                "GET    /pipeline/social/accounts",
+                "POST   /pipeline/social/accounts/mock",
+                "POST   /pipeline/social/{platform}/connect",
+                "GET    /pipeline/social/{platform}/callback",
+                "DELETE /pipeline/social/accounts/{account_id}",
+            ],
+            "publishing": [
+                "POST   /pipeline/publish-targets",
+                "GET    /pipeline/publish-targets",
+                "GET    /pipeline/publish-targets/{target_id}",
+                "POST   /pipeline/publish-targets/{target_id}/approve",
+                "POST   /pipeline/publish-targets/{target_id}/publish-now",
+                "POST   /pipeline/publish-targets/{target_id}/retry",
+                "POST   /pipeline/publish-targets/{target_id}/cancel",
+            ],
+            "schedules": [
+                "POST   /pipeline/schedules",
+                "GET    /pipeline/schedules",
+                "GET    /pipeline/schedules/{schedule_id}",
+                "PATCH  /pipeline/schedules/{schedule_id}",
+                "DELETE /pipeline/schedules/{schedule_id}",
+                "POST   /pipeline/schedules/{schedule_id}/run-now",
+                "POST   /pipeline/schedules/dispatch-due",
+                "GET    /pipeline/schedules/{schedule_id}/runs",
             ],
         },
     }
