@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowRight, CalendarClock, PlayCircle, TrendingUp, Workflow } from "lucide-react";
+import { ArrowRight, CalendarClock, PlayCircle, TrendingUp, Workflow, Plus } from "lucide-react";
 import AppChrome from "@/components/dysentry/AppChrome";
 import Button from "@/components/dysentry/Button";
 import { Image } from "@/components/ui/image";
+import CreateStoryModal from "@/components/dysentry/CreateStoryModal";
 import { AreaChart, Area, XAxis, ResponsiveContainer, Tooltip } from "recharts";
 import {
   listEditorEpisodes,
@@ -21,6 +22,7 @@ export default function Dashboard() {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [createModalOpen, setCreateModalOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -73,13 +75,30 @@ export default function Dashboard() {
     { label: "Connected channels", value: connectedAccounts.length },
   ];
 
+  // Refresh stories after creating a new one
+  const handleStoryCreated = () => {
+    setCreateModalOpen(false);
+    // Refresh the stories list
+    listStories().then(setStories).catch(() => {});
+  };
+
   return (
     <AppChrome
       breadcrumb={[{ label: "Studio" }, { label: "Dashboard" }]}
       actions={
-        <Link to="/schedule">
-          <Button className="px-5 py-2.5 text-[14px]">Open schedule</Button>
-        </Link>
+        <>
+          <Button 
+            variant="primary"
+            onClick={() => setCreateModalOpen(true)}
+            className="px-5 py-2.5 text-[14px]"
+          >
+            <Plus className="h-4 w-4 mr-1" />
+            New Story
+          </Button>
+          <Link to="/schedule">
+            <Button className="px-5 py-2.5 text-[14px]">Open schedule</Button>
+          </Link>
+        </>
       }
     >
       <div className="mx-auto max-w-[1280px] px-8 py-10">
@@ -270,6 +289,17 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      <CreateStoryModal
+        open={createModalOpen}
+        onOpenChange={(open) => {
+          setCreateModalOpen(open);
+          if (!open) {
+            // Refresh stories when modal closes
+            listStories().then(setStories).catch(() => {});
+          }
+        }}
+      />
     </AppChrome>
   );
 }

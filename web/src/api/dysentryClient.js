@@ -133,6 +133,26 @@ export async function listStories() {
   return stories.map(mapStoryToSeries);
 }
 
+export async function createStory(story) {
+  const payload = {
+    title: story.title,
+    prompt: story.prompt || story.description || "",
+    genre: story.genre || "action",
+    style: story.style || "anime",
+    frame_ratio: story.frame_ratio || "16:9",
+    requested_video_ratio: story.requested_video_ratio || story.frame_ratio || "16:9",
+    num_episodes: story.num_episodes || 1,
+    num_scenes: story.num_scenes || 5,
+    workflow_type: story.workflow_type || "creator_series",
+    requested_media_kind: story.requested_media_kind || "auto",
+  };
+  const created = await request("/pipeline/stories", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return mapStoryToSeries(created);
+}
+
 export async function listEditorEpisodes(storyId) {
   const episodes = await request(`/pipeline/episodes/story/${storyId}`);
   return episodes.map(mapEpisodeToEditorEpisode);
