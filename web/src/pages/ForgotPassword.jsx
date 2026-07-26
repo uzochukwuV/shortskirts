@@ -15,10 +15,25 @@ export default function ForgotPassword() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/pipeline/auth/forgot-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      if (response.ok) {
+        setSent(true);
+      } else {
+        const data = await response.json().catch(() => ({}));
+        console.error("Password reset request failed:", data);
+        setSent(true);
+      }
+    } catch (error) {
+      console.error("Password reset request error:", error);
       setSent(true);
-    }, 300);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -34,7 +49,7 @@ export default function ForgotPassword() {
     >
       {sent ? (
         <p className="text-sm text-foreground text-center">
-          Password reset is not wired into this backend yet. Contact support or create an admin reset flow before exposing this screen.
+          If an account exists with that email, you will receive a password reset link shortly.
         </p>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-4">

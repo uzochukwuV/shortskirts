@@ -113,28 +113,69 @@ const auth = {
   },
 };
 
-export const db = {
-  auth,
-  entities: new Proxy(
-    {},
-    {
-      get: () => ({
-        filter: async () => [],
-        get: async () => null,
-        create: async () => ({}),
-        update: async () => ({}),
-        delete: async () => ({}),
-      }),
+function createEntityApi(entityType, basePath) {
+  return {
+    async filter(query = {}) {
+      const qs = new URLSearchParams();
+      Object.entries(query).forEach(([k, v]) => {
+        if (v !== undefined && v !== null && v !== "") qs.set(k, v);
+      });
+      const qsStr = qs.toString();
+      return request(`${basePath}${qsStr ? `?${qsStr}` : ""}`);
     },
-  ),
-  integrations: {
-    Core: {
-      UploadFile: async () => {
-        throw new Error("File upload is not wired yet");
-      },
+    async get(id) {
+      return request(`${basePath}/${id}`);
+    },
+    async create(payload) {
+      return request(basePath, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    },
+    async update(id, payload) {
+      return request(`${basePath}/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+    },
+    async delete(id) {
+      return request(`${basePath}/${id}`, {
+        method: "DELETE",
+      });
+    },
+  };
+}
+
+const entities = {
+  series: createEntityApi("series", "/pipeline/stories"),
+  episode: createEntityApi("episode", "/pipeline/episodes"),
+  scene: createEntityApi("scene", "/pipeline/scenes"),
+  character: createEntityApi("character", "/pipeline/characters"),
+  job: createEntityApi("job", "/pipeline/jobs"),
+  schedule: createEntityApi("schedule", "/pipeline/schedules"),
+  publishTarget: createEntityApi("publishTarget", "/pipeline/publish-targets"),
+  socialAccount: createEntityApi("socialAccount", "/pipeline/social/accounts"),
+  bible: createEntityApi("bible", "/pipeline/bibles"),
+  gallery: createEntityApi("gallery", "/pipeline/gallery"),
+  checkpoint: createEntityApi("checkpoint", "/pipeline/checkpoints"),
+  pipelineRun: createEntityApi("pipelineRun", "/pipeline/runs"),
+  user: createEntityApi("user", "/pipeline/users"),
+};
+
+const integrations = {
+  Core: {
+    async UploadFile(file) {
+      const formData = new FormData();
+      formData.append("file", file);
+      return request("/pipeline/uploads/image", {
+        method: "POST",
+        body: formData,
+        headers: {},
+      });
     },
   },
 };
 
+export const db = { auth, entities, integrations };
 export const base44 = db;
 export default db;
