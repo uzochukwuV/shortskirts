@@ -53,3 +53,7 @@ Thumbs.db
 *.venv
 
 *.venv-py311
+
+# AppManager deployment config (contains secrets)
+.appmanager/
+.env.local

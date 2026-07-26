@@ -12,6 +12,12 @@ import httpx
 
 from job_queue import get_redis
 from pipeline.metrics import record_pipeline_metric
+from pipeline.pipeline_runtime import (
+    current_pipeline_run_id,
+    current_pipeline_step_id,
+    finish_pipeline_step,
+    start_pipeline_step,
+)
 
 
 def _env_float(name: str, default: float) -> float:
@@ -183,6 +189,26 @@ async def run_provider_step(
     while True:
         attempt += 1
         start = time.perf_counter()
+        attempt_step_id: str | None = None
+        parent_step_id = current_pipeline_step_id()
+        run_id = current_pipeline_run_id()
+        if run_id:
+            try:
+                attempt_step_id = await start_pipeline_step(
+                    run_id=run_id,
+                    parent_step_id=parent_step_id,
+                    step_key=step_name,
+                    step_type="provider_attempt",
+                    attempt=attempt,
+                    provider=policy.provider,
+                    input={
+                        "policy": policy_name,
+                        "step_name": step_name,
+                        "extra": extra or {},
+                    },
+                )
+            except Exception as trace_exc:
+                print(f"[provider_policy] Failed to start provider attempt trace: {trace_exc}")
         await _acquire_rate_limit(policy)
         try:
             result = await operation()
@@ -221,11 +247,45 @@ async def run_provider_step(
                 provider=policy.provider,
                 extra=merged_extra,
             )
+            if attempt_step_id:
+                await finish_pipeline_step(
+                    attempt_step_id,
+                    status="completed",
+                    output={
+                        "duration_ms": latency_ms,
+                        "estimated_cost_usd": cost,
+                        "retries_before_success": attempt - 1,
+                        "extra": merged_extra,
+                    },
+                    provider=policy.provider,
+                    provider_model=merged_extra.get("model"),
+                    provider_task_id=merged_extra.get("task_id") or merged_extra.get("provider_task_id"),
+                    provider_request_id=merged_extra.get("request_id") or merged_extra.get("provider_request_id"),
+                )
             return result
         except Exception as exc:
             last_exc = exc
             latency_ms = int((time.perf_counter() - start) * 1000)
             retryable = _is_retryable(exc)
+            if attempt_step_id:
+                try:
+                    await finish_pipeline_step(
+                        attempt_step_id,
+                        status="retryable" if retryable and attempt < policy.max_attempts else "failed",
+                        output={
+                            "duration_ms": latency_ms,
+                            "will_retry": bool(retryable and attempt < policy.max_attempts),
+                            "max_attempts": policy.max_attempts,
+                            "extra": extra or {},
+                        },
+                        error=str(exc),
+                        provider=policy.provider,
+                        provider_model=(extra or {}).get("model"),
+                        provider_task_id=(extra or {}).get("task_id") or (extra or {}).get("provider_task_id"),
+                        provider_request_id=(extra or {}).get("request_id") or (extra or {}).get("provider_request_id"),
+                    )
+                except Exception as trace_exc:
+                    print(f"[provider_policy] Failed to finish provider attempt trace: {trace_exc}")
             await record_pipeline_metric(
                 metric_kind="provider",
                 status="retryable" if retryable else "failed",

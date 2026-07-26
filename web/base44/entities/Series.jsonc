@@ -1,0 +1,50 @@
+{
+  "name": "Series",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "cover_image": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "in_production",
+        "publishing",
+        "completed"
+      ],
+      "default": "draft"
+    },
+    "platform": {
+      "type": "string",
+      "enum": [
+        "tiktok",
+        "reels",
+        "youtube_shorts",
+        "stories",
+        "multi"
+      ],
+      "default": "multi"
+    },
+    "genre": {
+      "type": "string"
+    },
+    "episode_count": {
+      "type": "number",
+      "default": 0
+    },
+    "style_memory": {
+      "type": "string",
+      "description": "Persistent notes on visual style, tone, and formatting conventions"
+    }
+  },
+  "required": [
+    "title"
+  ]
+}

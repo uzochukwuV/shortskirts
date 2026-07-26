@@ -9,6 +9,7 @@ import httpx
 from storage.b2 import upload_bytes, download_url_to_bytes, build_key
 from pipeline.character_gen import generate_image_bytes
 from pipeline.story_agent import build_scene_prompt
+from pipeline.media_tools import image_sequence_to_video
 
 
 def _scene_duration(scene: dict) -> float:
@@ -97,24 +98,12 @@ async def assemble_narrated_episode(
             image_paths.append(tmp.name)
             tmp_files.append(tmp.name)
 
-        from moviepy.editor import ImageClip, concatenate_videoclips
-
-        clips = []
-        for path, scene in zip(image_paths, scenes):
-            clip = ImageClip(path).set_duration(max(5.0, float(scene.get("duration", 6.0) or 6.0))).set_fps(24)
-            clips.append(clip)
-
-        final = concatenate_videoclips(clips, method="compose")
-        final = final.set_fps(24)
-
         out_tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
         out_tmp.close()
         tmp_files.append(out_tmp.name)
 
-        final.write_videofile(out_tmp.name, codec="libx264", audio=False, fps=24, logger=None)
-        for clip in clips:
-            clip.close()
-        final.close()
+        durations = [max(5.0, float(scene.get("duration", 6.0) or 6.0)) for scene in scenes]
+        await image_sequence_to_video(image_paths, durations, out_tmp.name)
 
         with open(out_tmp.name, "rb") as f:
             assembled_bytes = f.read()

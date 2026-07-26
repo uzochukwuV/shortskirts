@@ -5,23 +5,39 @@ from typing import Iterable, Optional
 import redis.asyncio as redis
 import asyncpg
 
-READY_QUEUE_KEY = "storyforge:jobs:ready"
-DELAYED_QUEUE_KEY = "storyforge:jobs:delayed"
+QUEUE_PREFIX = os.getenv("REDIS_QUEUE_PREFIX", "storyforge").strip() or "storyforge"
+
+
+def _qkey(value: str) -> str:
+    if QUEUE_PREFIX == "storyforge":
+        return value
+    suffix = value.split("storyforge:", 1)[1] if value.startswith("storyforge:") else value
+    return f"{QUEUE_PREFIX}:{suffix}"
+
+
+READY_QUEUE_KEY = _qkey("storyforge:jobs:ready")
+DELAYED_QUEUE_KEY = _qkey("storyforge:jobs:delayed")
 
 WORKLOAD_STORY = "story"
 WORKLOAD_MEDIA = "media"
 WORKLOAD_AUDIO = "audio"
+WORKLOAD_PUBLISH = "publish"
+WORKLOAD_SCHEDULER = "scheduler"
 WORKLOAD_ALL = "all"
 
 READY_QUEUE_KEYS = {
-    WORKLOAD_STORY: "storyforge:jobs:ready:story",
-    WORKLOAD_MEDIA: "storyforge:jobs:ready:media",
-    WORKLOAD_AUDIO: "storyforge:jobs:ready:audio",
+    WORKLOAD_STORY: _qkey("storyforge:jobs:ready:story"),
+    WORKLOAD_MEDIA: _qkey("storyforge:jobs:ready:media"),
+    WORKLOAD_AUDIO: _qkey("storyforge:jobs:ready:audio"),
+    WORKLOAD_PUBLISH: _qkey("storyforge:jobs:ready:publish"),
+    WORKLOAD_SCHEDULER: _qkey("storyforge:jobs:ready:scheduler"),
 }
 DELAYED_QUEUE_KEYS = {
-    WORKLOAD_STORY: "storyforge:jobs:delayed:story",
-    WORKLOAD_MEDIA: "storyforge:jobs:delayed:media",
-    WORKLOAD_AUDIO: "storyforge:jobs:delayed:audio",
+    WORKLOAD_STORY: _qkey("storyforge:jobs:delayed:story"),
+    WORKLOAD_MEDIA: _qkey("storyforge:jobs:delayed:media"),
+    WORKLOAD_AUDIO: _qkey("storyforge:jobs:delayed:audio"),
+    WORKLOAD_PUBLISH: _qkey("storyforge:jobs:delayed:publish"),
+    WORKLOAD_SCHEDULER: _qkey("storyforge:jobs:delayed:scheduler"),
 }
 
 _redis_client: Optional[redis.Redis] = None
@@ -56,6 +72,15 @@ async def close_redis():
 
 
 def job_workload(entity_type: str, job_type: str | None = None) -> str:
+    if entity_type == "publish" or job_type in {"publish_episode", "publish_target"}:
+        return WORKLOAD_PUBLISH
+    if entity_type == "schedule" or job_type in {
+        "scheduled_generate_only",
+        "scheduled_publish_existing",
+        "scheduled_generate_and_publish",
+        "scheduled_series_continuation",
+    }:
+        return WORKLOAD_SCHEDULER
     if entity_type == "story":
         if job_type == "checkpoint_audio":
             return WORKLOAD_AUDIO
@@ -195,7 +220,6 @@ async def mark_job_retrying(
            WHERE id=$1""",
         job_id,
         error,
-        worker_id,
     )
 
 
@@ -204,6 +228,10 @@ async def recover_expired_jobs(pool: asyncpg.Pool, workload: str, limit: int = 1
         workload_clause = "(entity_type IN ('character','scene') OR job_type IN ('char_refs','scene_regen'))"
     elif workload == WORKLOAD_AUDIO:
         workload_clause = "(job_type = 'checkpoint_audio')"
+    elif workload == WORKLOAD_PUBLISH:
+        workload_clause = "(entity_type = 'publish' OR job_type IN ('publish_episode','publish_target'))"
+    elif workload == WORKLOAD_SCHEDULER:
+        workload_clause = "(entity_type = 'schedule' OR job_type IN ('scheduled_generate_only','scheduled_publish_existing','scheduled_generate_and_publish','scheduled_series_continuation'))"
     else:
         workload_clause = "(entity_type = 'story' OR job_type IN ('full_episode','full_episode_resume'))"
     rows = await pool.fetch(

@@ -1,0 +1,37 @@
+{
+  "name": "Character",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "series_id": {
+      "type": "string"
+    },
+    "role": {
+      "type": "string",
+      "description": "e.g. Protagonist, Antagonist, Narrator"
+    },
+    "description": {
+      "type": "string"
+    },
+    "appearance": {
+      "type": "string",
+      "description": "Persistent visual description for consistency"
+    },
+    "personality": {
+      "type": "string"
+    },
+    "voice": {
+      "type": "string",
+      "description": "Voice/tone profile for narration and dialogue"
+    },
+    "reference_image": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "series_id"
+  ]
+}

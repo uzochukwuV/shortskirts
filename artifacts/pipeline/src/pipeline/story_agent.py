@@ -218,6 +218,7 @@ async def generate_episode_plan(
     ref_lines: list[str] = []
     reference_context = reference_context or {}
     frame_ratio = reference_context.get("frame_ratio") or "16:9"
+    requested_media_kind = reference_context.get("requested_media_kind") or "auto"
     for label, urls in (
         ("style_reference_urls", reference_context.get("style_reference_urls") or []),
         ("character_reference_urls", reference_context.get("character_reference_urls") or []),
@@ -237,6 +238,7 @@ async def generate_episode_plan(
         f"Number of episodes: {num_episodes}\n"
         f"Scenes per episode: {num_scenes}\n"
         f"Workflow type: {workflow_type}\n"
+        f"Requested media kind: {requested_media_kind}\n"
         f"Frame ratio: {frame_ratio}\n"
         f"{reference_block}"
         f"{bible_block}\n"
@@ -324,6 +326,140 @@ async def build_scene_prompt(
         f"Frame ratio: {frame_ratio}.",
     ]
     return " ".join(p for p in parts if p)
+
+
+async def suggest_story_edit(story: dict, instruction: str) -> dict:
+    plan = story.get("episode_plan") or {}
+    workflow_type = story.get("workflow_type", "creator_series")
+    content = await _chat(
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You revise production outlines for AI video pipelines. "
+                    "Return only valid JSON with this shape: "
+                    '{"message":"short summary","story_patch":{"title":"optional","prompt":"optional","genre":"optional","style":"optional","synopsis":"optional","setting":"optional","themes":["optional"]}}'
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Workflow type: {workflow_type}\n"
+                    f"Title: {story.get('title', '')}\n"
+                    f"Prompt: {story.get('prompt', '')}\n"
+                    f"Genre: {story.get('genre', '')}\n"
+                    f"Style: {story.get('style', '')}\n"
+                    f"Current synopsis: {plan.get('synopsis', '')}\n"
+                    f"Current setting: {plan.get('setting', '')}\n"
+                    f"Current themes: {json.dumps(plan.get('themes', []))}\n"
+                    f"Instruction: {instruction}\n"
+                    "Keep the patch narrowly scoped to the instruction."
+                ),
+            },
+        ],
+        temperature=0.6,
+        max_tokens=1200,
+    )
+    if content.startswith("```"):
+        parts = content.split("```")
+        content = parts[1] if len(parts) > 1 else parts[0]
+        if content.startswith("json"):
+            content = content[4:]
+    return json.loads(content.strip())
+
+
+async def suggest_scene_edit(story: dict, scene: dict, instruction: str) -> dict:
+    plan = story.get("episode_plan") or {}
+    content = await _chat(
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You revise a single scene in an AI video production console. "
+                    "Return only valid JSON with this shape: "
+                    '{"message":"short summary","scene_patch":{"title":"optional","description":"optional","visual_prompt":"optional","mood":"optional","location":"optional","action":"optional","narration":"optional","prompt":"optional"}}'
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Story title: {story.get('title', '')}\n"
+                    f"Story synopsis: {plan.get('synopsis', '')}\n"
+                    f"Scene title: {scene.get('title', '')}\n"
+                    f"Scene description: {scene.get('description', '')}\n"
+                    f"Scene visual prompt: {scene.get('visual_prompt', '')}\n"
+                    f"Scene mood: {scene.get('mood', '')}\n"
+                    f"Scene location: {scene.get('location', '')}\n"
+                    f"Scene action: {scene.get('action', '')}\n"
+                    f"Scene narration: {scene.get('narration', '')}\n"
+                    f"Instruction: {instruction}\n"
+                    "Keep character continuity and preserve the existing scene intent unless the instruction changes it."
+                ),
+            },
+        ],
+        temperature=0.6,
+        max_tokens=1200,
+    )
+    if content.startswith("```"):
+        parts = content.split("```")
+        content = parts[1] if len(parts) > 1 else parts[0]
+        if content.startswith("json"):
+            content = content[4:]
+    return json.loads(content.strip())
+
+
+async def suggest_story_operation(
+    story: dict,
+    scene: dict | None,
+    checkpoint: dict | None,
+    instruction: str,
+    valid_actions: list[str],
+) -> dict:
+    content = await _chat(
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are an operations coordinator for an AI story production console. "
+                    "Choose the single best operation for the user's instruction. "
+                    "You may only choose from the valid actions list. "
+                    "If none fit, return operation unsupported. "
+                    "Return only valid JSON with this exact shape: "
+                    '{"operation":"edit_story|edit_scene|approve_outline|regenerate_outline|start_generation|regenerate_scene|approve_checkpoint|cancel_run|retry_failed_step|unsupported",'
+                    '"target":"story|scene|checkpoint|run",'
+                    '"message":"short explanation",'
+                    '"requires_confirmation":false}'
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Story title: {story.get('title', '')}\n"
+                    f"Story status: {story.get('status', '')}\n"
+                    f"Instruction: {instruction}\n"
+                    f"Valid actions: {json.dumps(valid_actions)}\n"
+                    f"Scene context: {json.dumps(scene or {}, default=str)}\n"
+                    f"Checkpoint context: {json.dumps(checkpoint or {}, default=str)}\n"
+                    "Pick the smallest correct action. "
+                    "Use edit_story for storyline, prompt, synopsis, theme, or outline text changes. "
+                    "Use edit_scene for one-scene text or prompt changes. "
+                    "Use regenerate_outline when the user wants a new outline generated. "
+                    "Use start_generation when they want to render approved work. "
+                    "Use regenerate_scene when they want the selected scene rerendered. "
+                    "Use approve_checkpoint only when the intent is to continue past a review gate. "
+                    "Use cancel_run or retry_failed_step only for run control."
+                ),
+            },
+        ],
+        temperature=0.2,
+        max_tokens=500,
+    )
+    if content.startswith("```"):
+        parts = content.split("```")
+        content = parts[1] if len(parts) > 1 else parts[0]
+        if content.startswith("json"):
+            content = content[4:]
+    return json.loads(content.strip())
 
 
 def _safe_story_ratio(story_context: dict) -> str | None:

@@ -1,0 +1,116 @@
+common:
+  deployment:
+    ecsInstanceType: ecs.u1-c1m2.large
+    instanceId: i-t4n8gt40krtdeqh894ke
+    internetMaxBandwidthOut: 5
+    port: 8080
+    systemDiskSize: 40
+  environment:
+    B2_APPLICATION_KEY: CHANGEME_B2_APPLICATION_KEY
+    B2_BUCKET_NAME: CHANGEME_B2_BUCKET_NAME
+    B2_ENDPOINT_URL: CHANGEME_B2_ENDPOINT_URL
+    B2_KEY_ID: CHANGEME_B2_KEY_ID
+    B2_READ_APPLICATION_KEY: CHANGEME_B2_READ_APPLICATION_KEY
+    B2_READ_KEY_ID: CHANGEME_B2_READ_KEY_ID
+    COCKROACHDB_URL: CHANGEME_COCKROACHDB_URL
+    DASHSCOPE_API_KEY: CHANGEME_DASHSCOPE_API_KEY
+    REDIS_URL: CHANGEME_REDIS_URL
+  scripts:
+    start: |-
+      #!/bin/bash
+      set -e
+      APP_DIR=/root/project
+      ZIP_FILE=$(ls /root/project_*.zip 2>/dev/null | tail -1)
+      LOG_FILE=/root/app.log
+      PID_FILE=/root/app.pid
+
+      export COCKROACHDB_URL='${COCKROACHDB_URL}'
+      export REDIS_URL='${REDIS_URL}'
+      export DASHSCOPE_API_KEY='${DASHSCOPE_API_KEY}'
+      export B2_BUCKET_NAME='${B2_BUCKET_NAME}'
+      export B2_ENDPOINT_URL='${B2_ENDPOINT_URL}'
+      export B2_KEY_ID='${B2_KEY_ID}'
+      export B2_APPLICATION_KEY='${B2_APPLICATION_KEY}'
+      export B2_READ_KEY_ID='${B2_READ_KEY_ID}'
+      export B2_READ_APPLICATION_KEY='${B2_READ_APPLICATION_KEY}'
+
+      [ -f "$PID_FILE" ] && kill "$(cat "$PID_FILE")" 2>/dev/null || true
+      rm -f "$PID_FILE"
+
+      if command -v dnf &>/dev/null; then
+        PKG_MGR="dnf"
+      elif command -v yum &>/dev/null; then
+        PKG_MGR="yum"
+      elif command -v apt-get &>/dev/null; then
+        PKG_MGR="apt-get"
+      else
+        echo "ERROR: No supported package manager found" && exit 1
+      fi
+
+      if ! command -v unzip &>/dev/null; then
+        $PKG_MGR install -y unzip
+      fi
+
+      if ! command -v python3 &>/dev/null; then
+        if command -v apt-get &>/dev/null; then
+          apt-get update -qq && apt-get install -y -qq python3 python3-pip python3-venv
+        else
+          $PKG_MGR install -y python3 python3-pip
+        fi
+      fi
+
+      if ! command -v pip3 &>/dev/null; then
+        if command -v apt-get &>/dev/null; then
+          apt-get update -qq && apt-get install -y -qq python3-pip
+        else
+          $PKG_MGR install -y python3-pip
+        fi
+      fi
+
+      mkdir -p "$APP_DIR"
+      [ -n "$ZIP_FILE" ] && unzip -o "$ZIP_FILE" -d "$APP_DIR"
+
+      cd "$APP_DIR"
+
+      if ! python3 -m venv /root/storyforge-venv; then
+        if command -v apt-get &>/dev/null; then
+          apt-get update -qq && apt-get install -y -qq python3-venv
+        else
+          $PKG_MGR install -y python3-venv || true
+        fi
+        python3 -m venv /root/storyforge-venv
+      fi
+
+      . /root/storyforge-venv/bin/activate
+      python3 -m ensurepip --upgrade >/dev/null 2>&1 || true
+      python3 -m pip install --upgrade --no-cache-dir pip setuptools wheel >/dev/null 2>&1 || true
+      python3 -m pip install --no-cache-dir -r artifacts/pipeline/requirements.txt
+
+      nohup bash -lc 'source /root/storyforge-venv/bin/activate && cd /root/project/artifacts/pipeline/src && python3 -m uvicorn alibaba_entry:app --host 0.0.0.0 --port 8080 --log-level info' >> "$LOG_FILE" 2>&1 &
+      echo $! > "$PID_FILE"
+
+      sleep 3 && cat /root/app.log
+    stop: |-
+      #!/bin/bash
+      PID_FILE=/root/app.pid
+      APP_DIR=/root/project
+
+      if [ -f "$PID_FILE" ]; then
+          PID=$(cat "$PID_FILE")
+          if kill -0 "$PID" 2>/dev/null; then
+              kill "$PID"
+              sleep 3
+              kill -0 "$PID" 2>/dev/null && kill -9 "$PID"
+          fi
+          rm -f "$PID_FILE"
+      fi
+
+      if [ -n "$APP_DIR" ] && [ "${#APP_DIR}" -gt 6 ] && [[ "$APP_DIR" == /root/* ]] && [ -d "$APP_DIR" ]; then
+          rm -rf "$APP_DIR"
+      fi
+metadata:
+  description: ''
+  groupName: storyforge-20260719-ap-southeast-1
+  name: storyforge-20260719
+  regionId: ap-southeast-1
+  type: app

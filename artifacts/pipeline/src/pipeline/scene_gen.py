@@ -1,5 +1,5 @@
 import os
-import io
+import json
 import asyncio
 import httpx
 import time
@@ -10,6 +10,11 @@ from pipeline.character_gen import generate_image_bytes
 from pipeline.story_agent import build_scene_prompt
 from pipeline.provider_status import get_provider_status
 from pipeline.provider_policy import run_provider_step
+from pipeline.pipeline_config import normalize_pipeline_config
+from pipeline.media_tools import extract_last_frame_jpeg
+from pipeline.generation_agent import plan_scene_video
+from pipeline.provider_executor import execute_ordered_attempts
+from pipeline.runtime_context import get_job_context
 
 # ─── Model config ─────────────────────────────────────────────────────────────
 
@@ -17,8 +22,12 @@ DASHSCOPE_VIDEO_BASE = "https://dashscope-intl.aliyuncs.com/api/v1"
 AIML_BASE_URL = "https://api.aimlapi.com"
 
 # Video models
-DASHSCOPE_I2V_MODEL = "wan2.7-i2v-2026-04-25"
-DASHSCOPE_T2V_MODEL = "wan2.7-t2v-2026-06-12"
+DASHSCOPE_HAPPYHORSE_I2V_MODEL = os.getenv("DASHSCOPE_HAPPYHORSE_I2V_MODEL", "happyhorse-1.1-i2v")
+DASHSCOPE_HAPPYHORSE_T2V_MODEL = os.getenv("DASHSCOPE_HAPPYHORSE_T2V_MODEL", "happyhorse-1.1-t2v")
+DASHSCOPE_HAPPYHORSE_R2V_MODEL = os.getenv("DASHSCOPE_HAPPYHORSE_R2V_MODEL", "happyhorse-1.1-r2v")
+DASHSCOPE_WAN_I2V_MODEL = os.getenv("DASHSCOPE_WAN_I2V_MODEL", "wan2.7-i2v")
+DASHSCOPE_WAN_T2V_MODEL = os.getenv("DASHSCOPE_WAN_T2V_MODEL", "wan2.7-t2v")
+DASHSCOPE_WAN_R2V_MODEL = os.getenv("DASHSCOPE_WAN_R2V_MODEL", "wan2.7-r2v")
 AIML_I2V_MODEL = "alibaba/wan2.7-i2v"
 AIML_T2V_MODEL = "alibaba/wan2.7-t2v"
 
@@ -34,37 +43,65 @@ async def generate_scene_clip(
     previous_exit_frame_url: Optional[str],
     previous_scene_summary: str = "",
     style: str = "anime",
+    preferred_provider: Optional[str] = None,
 ) -> dict:
     scene_number = scene["scene_number"]
     prompt = await build_scene_prompt(scene, story_context, previous_scene_summary, style)
-
-    provider_status = await get_provider_status()
-    wan_i2v_available = bool(provider_status.get("wan", {}).get("i2v", {}).get("available"))
-    wan_t2v_available = bool(provider_status.get("wan", {}).get("t2v", {}).get("available"))
-
-    # Reference image only helps when Wan image-to-video is actually available.
-    # If i2v is blocked, we keep the continuity context in the prompt and use t2v.
-    reference_image = None
-    if wan_i2v_available:
-        if character_refs:
-            reference_image = character_refs[0]
-        elif previous_exit_frame_url:
-            reference_image = previous_exit_frame_url
+    pipeline_config = normalize_pipeline_config(
+        story_context.get("pipeline_config"),
+        workflow_state=story_context.get("workflow_state"),
+    )
+    media_config = pipeline_config.get("media", {})
+    continuity_config = pipeline_config.get("continuity", {})
+    requested_ratio = _requested_video_ratio(story_context, pipeline_config)
+    requested_duration = int(media_config.get("duration_seconds") or 5)
+    max_refs = int(continuity_config.get("max_reference_images") or 8)
+    reference_images = [u for u in character_refs if u][:max_refs]
+    if not reference_images and previous_exit_frame_url:
+        reference_images = [previous_exit_frame_url]
 
     seed_frame_url = None
-    if reference_image is None and wan_i2v_available:
-        seed_frame_url = await _build_seed_frame(story_id, episode_id, scene_number, prompt)
-        reference_image = seed_frame_url
-    elif not wan_i2v_available and (character_refs or previous_exit_frame_url):
-        continuity_note = "Maintain the same character identity, costume, and visual tone as the provided reference."
-        prompt = f"{prompt}\n\n{continuity_note}"
+    provider_status = await get_provider_status()
+    job_ctx = get_job_context() or {}
+    agent_plan = await plan_scene_video(
+        story_id=story_id,
+        episode_id=episode_id,
+        scene_id=str(scene.get("id")) if scene.get("id") else None,
+        job_id=job_ctx.get("job_id"),
+        scene_number=scene_number,
+        reference_count=len(reference_images),
+        provider_status=provider_status,
+        pipeline_config=pipeline_config,
+        preferred_provider=preferred_provider,
+    )
+    if agent_plan.should_handoff:
+        raise RuntimeError(agent_plan.user_message or agent_plan.handoff_reason or "Video generation requires user intervention")
 
-    # Try DashScope video first, fall back to AIML.
-    # If Wan i2v is unavailable, we intentionally call t2v instead of forcing a broken reference path.
-    if reference_image is None and not wan_t2v_available:
-        raise RuntimeError("Wan text-to-video is unavailable and no reference frame was available for Wan image-to-video")
+    if reference_images:
+        prompt = f"{prompt}\n\nMaintain continuity with the available character and scene reference images."
 
-    video_url = await _generate_video(prompt, reference_image if wan_i2v_available else None)
+    async def _run_attempt(attempt: dict) -> Optional[str]:
+        attempt_refs = _reference_images_for_attempt(reference_images, attempt)
+        if attempt.get("provider") == "dashscope":
+            return await _try_dashscope_video(
+                prompt,
+                reference_images=attempt_refs,
+                requested_ratio=requested_ratio,
+                requested_duration=requested_duration,
+                model=attempt.get("model"),
+                capability=attempt.get("capability"),
+            )
+        if attempt.get("provider") == "aiml":
+            return await _try_aiml_video(
+                prompt,
+                image_url=attempt_refs[0] if attempt_refs else None,
+                requested_duration=requested_duration,
+                model=attempt.get("model"),
+            )
+        return None
+
+    video_url, selected_attempt, failed_attempts = await execute_ordered_attempts(agent_plan.attempts, _run_attempt)
+    provider_used = selected_attempt.get("provider")
 
     # Download once — reuse for both B2 upload and exit frame extraction
     clip_bytes = await download_url_to_bytes(video_url)
@@ -78,10 +115,15 @@ async def generate_scene_clip(
     return {
         "clip_url": b2_clip_url,
         "exit_frame_url": exit_frame_url,
-        "duration": 5.0,
+        "duration": float(requested_duration),
         "prompt": prompt,
-        "refs_used": 1 if (reference_image and wan_i2v_available) else 0,
+        "refs_used": len(reference_images),
         "seed_frame_url": seed_frame_url,
+        "video_provider": provider_used,
+        "video_model": selected_attempt.get("model"),
+        "video_ratio": requested_ratio,
+        "agent_video_plan": agent_plan.model_dump(),
+        "failed_video_attempts": failed_attempts,
     }
 
 
@@ -93,9 +135,114 @@ async def _build_seed_frame(story_id: str, episode_id: str, scene_number: int, p
     return upload_bytes(image_bytes, key, "image/jpeg")
 
 
+def _requested_video_ratio(story_context: dict, pipeline_config: dict | None = None) -> str:
+    configured_ratio = (pipeline_config or {}).get("media", {}).get("ratio")
+    if configured_ratio in {"16:9", "9:16", "1:1", "4:3", "3:4"}:
+        return configured_ratio
+    workflow_state = story_context.get("workflow_state") or {}
+    if isinstance(workflow_state, str):
+        try:
+            workflow_state = json.loads(workflow_state)
+        except Exception:
+            workflow_state = {}
+    if not isinstance(workflow_state, dict):
+        workflow_state = {}
+    ratio = workflow_state.get("requested_video_ratio") or story_context.get("requested_video_ratio")
+    if ratio in {"16:9", "9:16", "1:1", "4:3", "3:4"}:
+        return ratio
+    return os.getenv("VIDEO_DEFAULT_RATIO", "16:9")
+
+
 # ─── DashScope video ──────────────────────────────────────────────────────────
 
-async def _try_dashscope_video(prompt: str, image_url: Optional[str] = None) -> Optional[str]:
+def _dashscope_video_payload(
+    prompt: str,
+    *,
+    reference_images: list[str],
+    requested_ratio: str,
+    requested_duration: int,
+    model: str | None = None,
+    capability: str | None = None,
+) -> tuple[str, dict]:
+    endpoint = f"{DASHSCOPE_VIDEO_BASE}/services/aigc/video-generation/video-synthesis"
+    capability = capability or ("r2v" if len(reference_images) >= 2 else "i2v" if len(reference_images) == 1 else "t2v")
+    if capability == "r2v" and reference_images:
+        payload = {
+            "model": model or DASHSCOPE_HAPPYHORSE_R2V_MODEL,
+            "input": {
+                "prompt": _reference_prompt(prompt, len(reference_images)),
+                "media": [{"type": "reference_image", "url": url} for url in reference_images[:9]],
+            },
+            "parameters": {
+                "resolution": "1080P",
+                "ratio": requested_ratio,
+                "duration": requested_duration,
+                "watermark": False,
+            },
+        }
+        return endpoint, payload
+    if capability == "i2v" and reference_images:
+        payload = {
+            "model": model or DASHSCOPE_HAPPYHORSE_I2V_MODEL,
+            "input": {
+                "prompt": prompt,
+                "media": [{"type": "first_frame", "url": reference_images[0]}],
+            },
+            "parameters": {"resolution": "1080P", "ratio": requested_ratio, "duration": requested_duration, "watermark": False},
+        }
+        return endpoint, payload
+    payload = {
+        "model": model or DASHSCOPE_HAPPYHORSE_T2V_MODEL,
+        "input": {
+            "prompt": prompt,
+        },
+        "parameters": {
+            "resolution": "1080P",
+            "ratio": requested_ratio,
+            "duration": requested_duration,
+            "prompt_extend": True,
+            "watermark": False,
+        },
+    }
+    return endpoint, payload
+
+
+def _reference_prompt(prompt: str, ref_count: int) -> str:
+    if ref_count <= 0:
+        return prompt
+    if ref_count == 1:
+        return f"{prompt}\n\nPreserve the appearance from [Image 1] throughout the shot."
+    refs = ", ".join(f"[Image {i}]" for i in range(1, ref_count + 1))
+    return f"{prompt}\n\nUse {refs} as the reference set. Keep identities, outfits, and scene styling consistent across them."
+
+
+def _reference_images_for_attempt(reference_images: list[str], attempt: dict) -> list[str]:
+    capability = attempt.get("capability")
+    max_refs = int(attempt.get("max_refs") or 0)
+    if capability == "t2v" or max_refs <= 0:
+        return []
+    if capability == "i2v":
+        return reference_images[:1]
+    return reference_images[:max_refs]
+
+
+def _provider_preference_order(preferred_provider: Optional[str]) -> list[str]:
+    if preferred_provider == "aiml":
+        return ["aiml", "dashscope"]
+    if preferred_provider == "dashscope":
+        return ["dashscope", "aiml"]
+    return ["dashscope", "aiml"]
+
+
+async def _try_dashscope_video(
+    prompt: str,
+    *,
+    reference_images: list[str] | None = None,
+    requested_ratio: str = "16:9",
+    requested_duration: int = 5,
+    model: str | None = None,
+    capability: str | None = None,
+) -> Optional[str]:
     """Try DashScope (Qwen Cloud) video generation. Returns video URL or None on failure."""
     dashscope_key = os.environ.get("DASHSCOPE_API_KEY", "")
     if not dashscope_key:
@@ -107,24 +254,14 @@ async def _try_dashscope_video(prompt: str, image_url: Optional[str] = None) -> 
             "Content-Type": "application/json",
             "X-DashScope-Async": "enable",
         }
-
-        if image_url:
-            endpoint = f"{DASHSCOPE_VIDEO_BASE}/services/aigc/video-generation/video-synthesis"
-            payload = {
-                "model": DASHSCOPE_I2V_MODEL,
-                "input": {
-                    "prompt": prompt,
-                    "media": [{"type": "first_frame", "url": image_url}],
-                },
-                "parameters": {"resolution": "720P", "duration": 5},
-            }
-        else:
-            endpoint = f"{DASHSCOPE_VIDEO_BASE}/services/aigc/video-generation/video-synthesis"
-            payload = {
-                "model": DASHSCOPE_T2V_MODEL,
-                "input": {"prompt": prompt},
-                "parameters": {"resolution": "720P", "duration": 5},
-            }
+        endpoint, payload = _dashscope_video_payload(
+            prompt,
+            reference_images=reference_images or [],
+            requested_ratio=requested_ratio,
+            requested_duration=requested_duration,
+            model=model,
+            capability=capability,
+        )
 
         async with httpx.AsyncClient(timeout=30) as http:
             data = await run_provider_step(
@@ -191,7 +328,12 @@ async def _poll_dashscope_video(task_id: str, api_key: str, timeout: int = 600) 
 
 # ─── AIML video ───────────────────────────────────────────────────────────────
 
-async def _try_aiml_video(prompt: str, image_url: Optional[str] = None) -> str:
+async def _try_aiml_video(
+    prompt: str,
+    image_url: Optional[str] = None,
+    requested_duration: int = 5,
+    model: str | None = None,
+) -> str:
     """AIML video generation — primary if DashScope unavailable, else fallback."""
     aiml_key = os.environ.get("AIML_API_KEY", "")
     if not aiml_key:
@@ -203,9 +345,9 @@ async def _try_aiml_video(prompt: str, image_url: Optional[str] = None) -> str:
     }
 
     if image_url:
-        payload = {"model": AIML_I2V_MODEL, "prompt": prompt, "image_url": image_url, "duration": 5}
+        payload = {"model": model or AIML_I2V_MODEL, "prompt": prompt, "image_url": image_url, "duration": requested_duration}
     else:
-        payload = {"model": AIML_T2V_MODEL, "prompt": prompt, "duration": 5}
+        payload = {"model": model or AIML_T2V_MODEL, "prompt": prompt, "duration": requested_duration}
 
     async with httpx.AsyncClient(timeout=30) as http:
         data = await run_provider_step(
@@ -279,15 +421,51 @@ async def _poll_aiml_video(task_id: str, api_key: str, timeout: int = 600) -> st
     raise TimeoutError(f"AIML video task {task_id} timed out after {timeout}s")
 
 
-async def _generate_video(prompt: str, image_url: Optional[str] = None) -> str:
-    """Try DashScope first, fall back to AIML."""
-    result = await _try_dashscope_video(prompt, image_url)
-    if result:
-        print("[scene_gen] Video generated via DashScope (Qwen Cloud)")
-        return result
+async def _generate_video(
+    prompt: str,
+    *,
+    reference_images: list[str] | None = None,
+    requested_ratio: str = "16:9",
+    requested_duration: int = 5,
+    preferred_provider: Optional[str] = None,
+) -> tuple[str, str]:
+    """Generate video with provider ordering controlled by the coordinator."""
+    reference_images = [u for u in (reference_images or []) if u][:9]
+    provider_order = _provider_preference_order(preferred_provider)
+    first_ref = reference_images[0] if reference_images else None
 
-    print("[scene_gen] DashScope unavailable, using AIML fallback")
-    return await _try_aiml_video(prompt, image_url)
+    for provider in provider_order:
+        try:
+            if provider == "dashscope":
+                result = await _try_dashscope_video(
+                    prompt,
+                    reference_images=reference_images,
+                    requested_ratio=requested_ratio,
+                    requested_duration=requested_duration,
+                )
+                if result:
+                    print("[scene_gen] Video generated via DashScope (Qwen Cloud)")
+                    return result, "dashscope"
+                if reference_images:
+                    result = await _try_dashscope_video(
+                        prompt,
+                        reference_images=[],
+                        requested_ratio=requested_ratio,
+                        requested_duration=requested_duration,
+                    )
+                    if result:
+                        print("[scene_gen] Video generated via DashScope T2V fallback")
+                        return result, "dashscope"
+            else:
+                result = await _try_aiml_video(prompt, first_ref, requested_duration=requested_duration)
+                if result:
+                    print("[scene_gen] Video generated via AIML fallback")
+                    return result, "aiml"
+        except Exception as exc:
+            print(f"[scene_gen] {provider} generation failed: {str(exc)[:140]}")
+            continue
+
+    raise RuntimeError("All video providers failed")
 
 
 async def _post_json(http: httpx.AsyncClient, url: str, headers: dict, payload: dict):
@@ -313,26 +491,7 @@ async def extract_exit_frame_from_bytes(
     """Extract last frame from in-memory video bytes and upload to B2.
     Never reads from B2 — works entirely from bytes we already downloaded."""
     try:
-        import tempfile
-        import os as _os
-
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-            tmp.write(clip_bytes)
-            tmp_path = tmp.name
-
-        try:
-            from moviepy.editor import VideoFileClip
-            with VideoFileClip(tmp_path) as clip:
-                last_frame = clip.get_frame(max(0, clip.duration - 0.1))
-        finally:
-            _os.unlink(tmp_path)
-
-        from PIL import Image
-        img = Image.fromarray(last_frame.astype("uint8"))
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=90)
-        frame_bytes = buf.getvalue()
-
+        frame_bytes = await extract_last_frame_jpeg(clip_bytes)
         key = build_key(story_id, "episodes", episode_id, "scenes", f"scene_{scene_number}_exit.jpg")
         return upload_bytes(frame_bytes, key, "image/jpeg")
 

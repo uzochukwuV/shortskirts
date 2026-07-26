@@ -11,8 +11,10 @@ python-multipart==0.0.20
 pydantic==2.10.4
 pydantic-settings==2.7.0
 pillow==11.1.0
+imageio-ffmpeg==0.5.1
 moviepy==1.0.3
 numpy==1.26.4
 aiofiles==24.1.0
 redis==5.0.8
 tenacity==9.0.0
+cryptography==43.0.3
