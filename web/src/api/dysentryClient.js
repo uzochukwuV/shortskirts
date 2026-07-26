@@ -1,39 +1,8 @@
 import db from "@/api/base44Client";
 
-function apiBaseUrl() {
-  const raw = import.meta.env.VITE_API_BASE_URL || "";
-  return raw.endsWith("/") ? raw.slice(0, -1) : raw;
-}
-
-async function request(path, options = {}) {
-  const headers = new Headers(options.headers || {});
-  const token = db.auth.getToken?.();
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
-  if (options.body && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
-
-  const response = await fetch(`${apiBaseUrl()}${path}`, {
-    ...options,
-    headers,
-  });
-
-  const contentType = response.headers.get("content-type") || "";
-  const data = contentType.includes("application/json")
-    ? await response.json()
-    : await response.text();
-
-  if (!response.ok) {
-    const error = new Error(data?.detail || data || `Request failed with status ${response.status}`);
-    error.status = response.status;
-    error.data = data;
-    throw error;
-  }
-
-  return data;
-}
+// Use the centralized request from base44Client
+// Auth errors (401/403) are handled by base44Client
+const request = db.request;
 
 function frontendSceneStatus(scene) {
   if (scene.status === "running") return "regenerating";

@@ -1,4 +1,4 @@
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import React, { createContext, useState, useContext, useEffect, useCallback, useRef } from 'react';
 import db from '@/api/base44Client';
 
 const AuthContext = createContext();
@@ -11,6 +11,40 @@ export const AuthProvider = ({ children }) => {
   const [authError, setAuthError] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [appPublicSettings, setAppPublicSettings] = useState(null);
+  const isHandlingAuthError = useRef(false);
+
+  // Handle auth errors from API calls
+  const handleAuthError = useCallback((detail) => {
+    // Prevent multiple simultaneous auth error handling
+    if (isHandlingAuthError.current) return;
+    isHandlingAuthError.current = true;
+
+    // Only handle if we're authenticated and haven't already shown error
+    if (isAuthenticated && authChecked) {
+      console.warn('Auth error from API:', detail);
+      db.auth.setToken(null);
+      setAuthError({
+        type: 'auth_required',
+        message: 'Your session has expired. Please log in again.',
+      });
+      
+      // Redirect after a short delay to let the user see the error
+      setTimeout(() => {
+        window.location.href = "/login";
+      }, 2000);
+    }
+    
+    // Reset flag after a delay
+    setTimeout(() => {
+      isHandlingAuthError.current = false;
+    }, 1000);
+  }, [isAuthenticated, authChecked, authError]);
+
+  useEffect(() => {
+    // Subscribe to auth errors from API
+    const unsubscribe = db.onAuthError(handleAuthError);
+    return unsubscribe;
+  }, [handleAuthError]);
 
   useEffect(() => {
     checkAppState();
@@ -43,7 +77,6 @@ export const AuthProvider = ({ children }) => {
 
   const checkUserAuth = async () => {
     try {
-      // Now check if the user is authenticated
       setIsLoadingAuth(true);
       const currentUser = await db.auth.me();
       setUser(currentUser);

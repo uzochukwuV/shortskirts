@@ -1,5 +1,27 @@
 const TOKEN_KEY = "dysentry_auth_token";
 
+// Auth error event dispatcher
+const AUTH_ERROR_EVENT = "dysentry:auth-error";
+
+function emitAuthError(status) {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(AUTH_ERROR_EVENT, { 
+      detail: { status } 
+    }));
+  }
+}
+
+function onAuthError(callback) {
+  if (typeof window !== 'undefined') {
+    window.addEventListener(AUTH_ERROR_EVENT, (e) => callback(e.detail));
+  }
+  return () => {
+    if (typeof window !== 'undefined') {
+      window.removeEventListener(AUTH_ERROR_EVENT, callback);
+    }
+  };
+}
+
 function getApiBaseUrl() {
   const raw = import.meta.env.VITE_API_BASE_URL || "";
   return raw.endsWith("/") ? raw.slice(0, -1) : raw;
@@ -42,6 +64,11 @@ async function request(path, options = {}) {
   }
 
   if (!response.ok) {
+    // Emit auth error for 401/403 so components can handle logout
+    if (response.status === 401 || response.status === 403) {
+      emitAuthError(response.status);
+    }
+    
     const error = new Error(data?.detail || `Request failed with status ${response.status}`);
     error.status = response.status;
     error.data = data;
@@ -176,6 +203,6 @@ const integrations = {
   },
 };
 
-export const db = { auth, entities, integrations };
+export const db = { auth, entities, integrations, onAuthError };
 export const base44 = db;
 export default db;

@@ -482,6 +482,7 @@ export default function Editor() {
             <span className="rounded-full bg-ink px-1.5 py-0.5 text-[11px] text-white">
               {characters.length}
             </span>
+          )}
         </button>
       </div>
 
