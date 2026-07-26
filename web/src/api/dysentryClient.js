@@ -102,6 +102,17 @@ export async function listStories() {
   return stories.map(mapStoryToSeries);
 }
 
+export async function getDashboardBatch(storyIds) {
+  // Batch endpoint to avoid N+1 queries
+  const ids = storyIds.join(",");
+  const data = await request(`/pipeline/stories/batch/dashboard?ids=${ids}`);
+  return {
+    stories: data.stories.map(mapStoryToSeries),
+    episodes: data.episodes.map(mapEpisodeToEditorEpisode),
+    runs: data.runs,
+  };
+}
+
 export async function createStory(story) {
   const payload = {
     title: story.title,

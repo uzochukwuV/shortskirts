@@ -461,6 +461,62 @@ async def list_stories(user=Depends(get_current_user)):
     return result
 
 
+@router.get("/batch/dashboard")
+async def batch_dashboard_data(
+    ids: str = "",  # comma-separated story IDs
+    user=Depends(get_current_user),
+):
+    """
+    Batch endpoint for dashboard - returns stories, episodes, and runs in one call.
+    This avoids N+1 queries when loading the dashboard.
+    """
+    pool = await get_pool()
+    
+    # Parse story IDs
+    story_ids = [id.strip() for id in ids.split(",") if id.strip()]
+    
+    if not story_ids:
+        return {"stories": [], "episodes": [], "runs": []}
+    
+    # Get all stories
+    story_rows = await pool.fetch(
+        """SELECT * FROM stories WHERE id = ANY($1::uuid[]) AND owner_id=$2""",
+        story_ids,
+        user_id(user),
+    )
+    
+    # Get all episodes for these stories
+    episode_rows = await pool.fetch(
+        """SELECT e.*, s.title as story_title 
+           FROM episodes e 
+           JOIN stories s ON s.id = e.story_id 
+           WHERE e.story_id = ANY($1::uuid[]) AND s.owner_id=$2""",
+        story_ids,
+        user_id(user),
+    )
+    
+    # Get all runs for these stories
+    run_rows = await pool.fetch(
+        """SELECT pr.* FROM pipeline_runs pr
+           WHERE pr.story_id = ANY($1::uuid[])""",
+        story_ids,
+    )
+    
+    # Build story responses
+    stories = []
+    for row in story_rows:
+        plan_data = row["episode_plan"]
+        if isinstance(plan_data, str):
+            plan_data = json.loads(plan_data)
+        stories.append(_build_story_response(row, plan_data))
+    
+    return {
+        "stories": stories,
+        "episodes": [dict(row) for row in episode_rows],
+        "runs": [dict(row) for row in run_rows],
+    }
+
+
 @router.get("/{story_id}", response_model=StoryResponse)
 async def get_story(story_id: str, user=Depends(get_current_user)):
     pool = await get_pool()
