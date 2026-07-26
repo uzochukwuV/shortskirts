@@ -425,6 +425,38 @@ async def lock_scene(scene_id: str, user=Depends(get_current_user)):
     return scene
 
 
+@router.put("/{scene_id}/unlock", response_model=SceneResponse)
+async def unlock_scene(scene_id: str, user=Depends(get_current_user)):
+    """Unlock a scene so it can be regenerated."""
+    pool = await get_pool()
+    if not await _scene_belongs_to_owner(pool, scene_id, user_id(user)):
+        raise HTTPException(status_code=404, detail="Scene not found")
+    row = await pool.fetchrow(
+        "UPDATE scenes SET locked=false, updated_at=now() WHERE id=$1 RETURNING *",
+        scene_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Scene not found")
+    await record_scene_history(
+        pool,
+        story=await pool.fetchrow(
+            """SELECT s.* FROM scenes sc
+               JOIN episodes e ON e.id = sc.episode_id
+               JOIN stories s ON s.id = e.story_id
+               WHERE sc.id=$1""",
+            scene_id,
+        ),
+        scene=row,
+        event_type="scene_unlocked",
+        payload={"locked": False},
+    )
+    scene = _row_to_scene(row)
+    character_ids, primary_character_ids = await _load_scene_character_ids(pool, scene_id)
+    scene.character_ids = character_ids
+    scene.primary_character_ids = primary_character_ids
+    return scene
+
+
 @router.put("/{scene_id}", response_model=SceneResponse)
 async def update_scene(scene_id: str, body: SceneUpdate, user=Depends(get_current_user)):
     pool = await get_pool()
@@ -682,8 +714,22 @@ async def regenerate_scene(scene_id: str, user=Depends(get_current_user)):
     if scene.get("locked"):
         raise HTTPException(status_code=409, detail="Scene is locked and cannot be regenerated")
 
-    if scene.get("status") == "running":
-        raise HTTPException(status_code=409, detail="Scene generation already in progress")
+    # Use atomic conditional UPDATE to prevent race condition
+    # Only update if status is not 'running' and scene is not locked
+    updated = await pool.fetchrow(
+        """UPDATE scenes 
+           SET status='running', approval_status='pending', updated_at=now() 
+           WHERE id=$1 AND status != 'running' AND (locked IS NULL OR locked = false)
+           RETURNING *""",
+        scene_id,
+    )
+    
+    if not updated:
+        # Check why it wasn't updated to give proper error message
+        current_scene = await pool.fetchrow("SELECT * FROM scenes WHERE id=$1", scene_id)
+        if current_scene and current_scene.get("status") == "running":
+            raise HTTPException(status_code=409, detail="Scene generation already in progress")
+        raise HTTPException(status_code=409, detail="Scene cannot be regenerated")
 
     # Create a tracking job
     job_row = await pool.fetchrow(
@@ -694,12 +740,6 @@ async def regenerate_scene(scene_id: str, user=Depends(get_current_user)):
         scene_id,
     )
     job_id = str(job_row["id"])
-
-    await pool.execute(
-        "UPDATE scenes SET status='running', approval_status='pending', updated_at=now() WHERE id=$1",
-        scene_id,
-    )
-    updated = await pool.fetchrow("SELECT * FROM scenes WHERE id=$1", scene_id)
     story = await pool.fetchrow(
         """SELECT s.* FROM scenes sc
            JOIN episodes e ON e.id = sc.episode_id

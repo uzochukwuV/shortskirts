@@ -191,17 +191,26 @@ async def _probe_wan_r2v() -> dict[str, Any]:
 
 
 async def get_provider_status(force_refresh: bool = False) -> dict[str, Any]:
+    import asyncio
+
     if not force_refresh:
         cached = await _load_cached_status()
         if cached:
             return cached
 
+    # Probe all providers in parallel for faster status check
+    wan_t2v, wan_i2v, wan_r2v = await asyncio.gather(
+        _probe_wan_t2v(),
+        _probe_wan_i2v(),
+        _probe_wan_r2v(),
+    )
+    
     payload = {
         "checked_at": _utc_now(),
         "wan": {
-            "t2v": await _probe_wan_t2v(),
-            "i2v": await _probe_wan_i2v(),
-            "r2v": await _probe_wan_r2v(),
+            "t2v": wan_t2v,
+            "i2v": wan_i2v,
+            "r2v": wan_r2v,
         },
     }
     if payload["wan"]["i2v"].get("available"):

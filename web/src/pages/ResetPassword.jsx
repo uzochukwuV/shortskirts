@@ -15,6 +15,7 @@ export default function ResetPassword() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -23,7 +24,24 @@ export default function ResetPassword() {
       setError("Passwords do not match");
       return;
     }
-    setError("Password reset is not configured for this backend yet");
+    setLoading(true);
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/pipeline/auth/reset-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: resetToken, password: newPassword }),
+      });
+      if (response.ok) {
+        setSuccess(true);
+      } else {
+        const data = await response.json().catch(() => ({}));
+        setError(data?.detail || "Password reset failed. The link may be invalid or expired.");
+      }
+    } catch (err) {
+      setError("Unable to reach the server. Please try again later.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (!resetToken) {
@@ -40,6 +58,25 @@ export default function ResetPassword() {
       >
         <p className="text-sm text-foreground text-center">
           The link you used appears to be incomplete. Please request a new password reset email.
+        </p>
+      </AuthLayout>
+    );
+  }
+
+  if (success) {
+    return (
+      <AuthLayout
+        icon={Lock}
+        title="Password updated"
+        subtitle="Your password has been reset successfully"
+        footer={
+          <Link to="/login" className="text-primary font-medium hover:underline">
+            Log in
+          </Link>
+        }
+      >
+        <p className="text-sm text-foreground text-center">
+          You can now log in with your new password.
         </p>
       </AuthLayout>
     );

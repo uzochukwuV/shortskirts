@@ -1,11 +1,20 @@
 import os
 import json
 import tempfile
+import asyncio
 import httpx
 from datetime import datetime
 
 from storage.b2 import upload_bytes, build_key
 from pipeline.media_tools import concatenate_video_files
+
+
+async def _download_clip(url: str, timeout: int = 60) -> bytes:
+    """Download a single clip and return its bytes."""
+    async with httpx.AsyncClient(timeout=timeout) as http:
+        r = await http.get(url, follow_redirects=True)
+        r.raise_for_status()
+        return r.content
 
 
 async def assemble_episode(
@@ -22,12 +31,13 @@ async def assemble_episode(
     tmp_files = []
 
     try:
-        for i, url in enumerate(clip_urls):
-            async with httpx.AsyncClient(timeout=60) as http:
-                r = await http.get(url, follow_redirects=True)
-                r.raise_for_status()
-                data = r.content
+        # Download all clips in parallel for faster assembly
+        clip_bytes_list = await asyncio.gather(*[
+            _download_clip(url) for url in clip_urls
+        ])
 
+        # Write downloaded clips to temp files
+        for i, data in enumerate(clip_bytes_list):
             tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
             tmp.write(data)
             tmp.close()

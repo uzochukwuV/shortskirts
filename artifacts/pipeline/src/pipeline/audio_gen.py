@@ -68,6 +68,10 @@ async def synthesize_narration_audio(
         },
     }
 
+    dashscope_key = os.getenv("DASHSCOPE_API_KEY", "")
+    if not dashscope_key:
+        raise RuntimeError("DASHSCOPE_API_KEY environment variable is required for audio synthesis")
+
     async with httpx.AsyncClient(timeout=120) as http:
         data = await run_provider_step(
             "dashscope_audio",
@@ -76,7 +80,7 @@ async def synthesize_narration_audio(
                 http,
                 endpoint,
                 headers={
-                    "Authorization": f"Bearer {os.environ['DASHSCOPE_API_KEY']}",
+                    "Authorization": f"Bearer {dashscope_key}",
                     "Content-Type": "application/json",
                 },
                 payload=payload,

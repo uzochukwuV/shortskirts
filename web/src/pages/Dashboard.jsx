@@ -1,16 +1,16 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowRight, CalendarClock, PlayCircle, TrendingUp, Workflow } from "lucide-react";
+import { ArrowRight, CalendarClock, PlayCircle, TrendingUp, Workflow, Plus } from "lucide-react";
 import AppChrome from "@/components/dysentry/AppChrome";
 import Button from "@/components/dysentry/Button";
 import { Image } from "@/components/ui/image";
+import CreateStoryModal from "@/components/dysentry/CreateStoryModal";
 import { AreaChart, Area, XAxis, ResponsiveContainer, Tooltip } from "recharts";
 import {
-  listEditorEpisodes,
   listSchedules,
   listSocialAccounts,
   listStories,
-  listStoryRuns,
+  getDashboardBatch,
 } from "@/api/dysentryClient";
 
 export default function Dashboard() {
@@ -21,23 +21,29 @@ export default function Dashboard() {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [createModalOpen, setCreateModalOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
       try {
-        const storyList = await listStories();
-        const [scheduleList, accountList, episodeGroups, runGroups] = await Promise.all([
+        // Use batch endpoint to avoid N+1 queries
+        const [scheduleList, accountList, storyList] = await Promise.all([
           listSchedules(),
           listSocialAccounts(),
-          Promise.all(storyList.map((story) => listEditorEpisodes(story.id).catch(() => []))),
-          Promise.all(storyList.map((story) => listStoryRuns(story.id).catch(() => []))),
+          listStories(),
         ]);
+
+        // Then batch load episodes and runs for all stories
+        let batchData = { episodes: [], runs: [] };
+        if (storyList.length > 0) {
+          batchData = await getDashboardBatch(storyList.map((s) => s.id));
+        }
 
         setStories(storyList);
         setSchedules(scheduleList);
         setAccounts(accountList);
-        setEpisodes(episodeGroups.flat());
-        setRuns(runGroups.flat());
+        setEpisodes(batchData.episodes);
+        setRuns(batchData.runs);
       } catch (loadError) {
         setError(loadError.message || "Could not load dashboard");
       } finally {
@@ -54,9 +60,12 @@ export default function Dashboard() {
   const failedRuns = runs.filter((run) => run.status === "failed");
   const connectedAccounts = accounts.filter((account) => account.status === "connected");
   const latestStory = stories[0] || null;
+  // Chart shows episode completion status - green for completed, amber for pending
   const chartData = episodes.slice(0, 8).map((episode) => ({
     ep: `E${String(episode.episode_number).padStart(2, "0")}`,
-    views: episode.assembled_video_url ? 100 : 25,
+    status: episode.status === "completed" ? "done" : "pending",
+    // Note: Analytics data would come from a dedicated analytics endpoint
+    views: episode.assembled_video_url ? null : null, // Placeholder for real analytics
   }));
   const latestRuns = [...runs]
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
@@ -73,13 +82,30 @@ export default function Dashboard() {
     { label: "Connected channels", value: connectedAccounts.length },
   ];
 
+  // Refresh stories after creating a new one
+  const handleStoryCreated = () => {
+    setCreateModalOpen(false);
+    // Refresh the stories list
+    listStories().then(setStories).catch(() => {});
+  };
+
   return (
     <AppChrome
       breadcrumb={[{ label: "Studio" }, { label: "Dashboard" }]}
       actions={
-        <Link to="/schedule">
-          <Button className="px-5 py-2.5 text-[14px]">Open schedule</Button>
-        </Link>
+        <>
+          <Button 
+            variant="primary"
+            onClick={() => setCreateModalOpen(true)}
+            className="px-5 py-2.5 text-[14px]"
+          >
+            <Plus className="h-4 w-4 mr-1" />
+            New Story
+          </Button>
+          <Link to="/schedule">
+            <Button className="px-5 py-2.5 text-[14px]">Open schedule</Button>
+          </Link>
+        </>
       }
     >
       <div className="mx-auto max-w-[1280px] px-8 py-10">
@@ -270,6 +296,17 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      <CreateStoryModal
+        open={createModalOpen}
+        onOpenChange={(open) => {
+          setCreateModalOpen(open);
+          if (!open) {
+            // Refresh stories when modal closes
+            listStories().then(setStories).catch(() => {});
+          }
+        }}
+      />
     </AppChrome>
   );
 }

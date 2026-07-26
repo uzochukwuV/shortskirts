@@ -1,39 +1,8 @@
 import db from "@/api/base44Client";
 
-function apiBaseUrl() {
-  const raw = import.meta.env.VITE_API_BASE_URL || "";
-  return raw.endsWith("/") ? raw.slice(0, -1) : raw;
-}
-
-async function request(path, options = {}) {
-  const headers = new Headers(options.headers || {});
-  const token = db.auth.getToken?.();
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
-  if (options.body && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
-
-  const response = await fetch(`${apiBaseUrl()}${path}`, {
-    ...options,
-    headers,
-  });
-
-  const contentType = response.headers.get("content-type") || "";
-  const data = contentType.includes("application/json")
-    ? await response.json()
-    : await response.text();
-
-  if (!response.ok) {
-    const error = new Error(data?.detail || data || `Request failed with status ${response.status}`);
-    error.status = response.status;
-    error.data = data;
-    throw error;
-  }
-
-  return data;
-}
+// Use the centralized request from base44Client
+// Auth errors (401/403) are handled by base44Client
+const request = db.request;
 
 function frontendSceneStatus(scene) {
   if (scene.status === "running") return "regenerating";
@@ -131,6 +100,37 @@ export async function getEditorStory(storyId) {
 export async function listStories() {
   const stories = await request("/pipeline/stories");
   return stories.map(mapStoryToSeries);
+}
+
+export async function getDashboardBatch(storyIds) {
+  // Batch endpoint to avoid N+1 queries
+  const ids = storyIds.join(",");
+  const data = await request(`/pipeline/stories/batch/dashboard?ids=${ids}`);
+  return {
+    stories: data.stories.map(mapStoryToSeries),
+    episodes: data.episodes.map(mapEpisodeToEditorEpisode),
+    runs: data.runs,
+  };
+}
+
+export async function createStory(story) {
+  const payload = {
+    title: story.title,
+    prompt: story.prompt || story.description || "",
+    genre: story.genre || "action",
+    style: story.style || "anime",
+    frame_ratio: story.frame_ratio || "16:9",
+    requested_video_ratio: story.requested_video_ratio || story.frame_ratio || "16:9",
+    num_episodes: story.num_episodes || 1,
+    num_scenes: story.num_scenes || 5,
+    workflow_type: story.workflow_type || "creator_series",
+    requested_media_kind: story.requested_media_kind || "auto",
+  };
+  const created = await request("/pipeline/stories", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return mapStoryToSeries(created);
 }
 
 export async function listEditorEpisodes(storyId) {
@@ -266,5 +266,81 @@ export async function assistantForScene(storyId, sceneId, instruction) {
       target: "scene",
       scene_id: sceneId,
     }),
+  });
+}
+
+// Scene operations
+export async function deleteScene(sceneId) {
+  return request(`/pipeline/scenes/${sceneId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function lockScene(sceneId) {
+  return request(`/pipeline/scenes/${sceneId}/lock`, {
+    method: "PUT",
+  });
+}
+
+export async function unlockScene(sceneId) {
+  return request(`/pipeline/scenes/${sceneId}/unlock`, {
+    method: "PUT",
+  });
+}
+
+export async function rejectScene(sceneId) {
+  return request(`/pipeline/scenes/${sceneId}/reject`, {
+    method: "PUT",
+  });
+}
+
+export async function getSceneJobStatus(jobId) {
+  return request(`/pipeline/runs/${jobId}`);
+}
+
+// Episode operations
+export async function createEpisode(storyId, episodeData) {
+  return request(`/pipeline/episodes`, {
+    method: "POST",
+    body: JSON.stringify({
+      story_id: storyId,
+      ...episodeData,
+    }),
+  });
+}
+
+// Character operations
+export async function createCharacter(storyId, character) {
+  return request(`/pipeline/characters`, {
+    method: "POST",
+    body: JSON.stringify({
+      story_id: storyId,
+      name: character.name,
+      role: character.role || "supporting",
+      description: character.description || "",
+      appearance: character.appearance || "",
+      personality: character.personality || "",
+    }),
+  });
+}
+
+export async function updateCharacter(characterId, character) {
+  return request(`/pipeline/characters/${characterId}`, {
+    method: "PUT",
+    body: JSON.stringify(character),
+  });
+}
+
+export async function deleteCharacter(characterId) {
+  return request(`/pipeline/characters/${characterId}`, {
+    method: "DELETE",
+  });
+}
+
+// Export/Render operations
+export async function exportEpisode(episodeId, platform) {
+  return request(`/pipeline/episodes/${episodeId}/export`, {
+    method: "POST",
+    body: JSON.stringify({ platform }),
   });
 }
