@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Palette } from "lucide-react";
+import { Palette, Users, Plus } from "lucide-react";
 
 import { useToast } from "@/components/ui/use-toast";
 import Button from "@/components/dysentry/Button";
@@ -9,19 +9,28 @@ import SceneList from "@/components/dysentry/editor/SceneList";
 import SceneStage from "@/components/dysentry/editor/SceneStage";
 import AiChatPanel from "@/components/dysentry/editor/AiChatPanel";
 import ExportMenu from "@/components/dysentry/editor/ExportMenu";
-import CharacterDialog from "@/components/dysentry/editor/CharacterDialog";
+import SceneActionsDropdown from "@/components/dysentry/editor/SceneActionsDropdown";
+import CharacterSheet from "@/components/dysentry/editor/CharacterSheet";
+import EpisodeAddModal from "@/components/dysentry/editor/EpisodeAddModal";
 import StyleMemoryDialog from "@/components/dysentry/editor/StyleMemoryDialog";
 import {
   approveEditorScene,
   assistantForScene,
   createEditorScene,
+  createEpisode,
+  createCharacter,
+  deleteScene,
+  deleteCharacter,
   getEditorStory,
   listEditorCharacters,
   listEditorEpisodes,
   listEditorScenes,
+  lockScene,
   regenerateEditorScene,
   requestEditorSceneReview,
   saveStyleMemory,
+  unlockScene,
+  updateCharacter,
   updateEditorScene,
 } from "@/api/dysentryClient";
 
@@ -37,8 +46,11 @@ export default function Editor() {
   const [regenerating, setRegenerating] = useState(false);
   const [adding, setAdding] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [activeChar, setActiveChar] = useState(null);
-  const [charOpen, setCharOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [charSheetOpen, setCharSheetOpen] = useState(false);
+  const [charLoading, setCharLoading] = useState(false);
+  const [episodeModalOpen, setEpisodeModalOpen] = useState(false);
+  const [episodeLoading, setEpisodeLoading] = useState(false);
   const [styleOpen, setStyleOpen] = useState(false);
 
   const loadEpisodeScenes = useCallback(async (episodeId) => {
@@ -255,8 +267,148 @@ export default function Editor() {
     }
   };
 
-  const handleExport = (platforms) => {
-    toast({ title: `Export prepared for ${platforms.join(", ")}` });
+  // Scene actions
+  const handleDeleteScene = async (sceneId) => {
+    try {
+      await deleteScene(sceneId);
+      setScenes((prev) => prev.filter((s) => s.id !== sceneId));
+      if (selectedScene?.id === sceneId) {
+        setSelectedScene(scenes.find((s) => s.id !== sceneId) || null);
+      }
+      toast({ title: "Scene deleted" });
+    } catch (error) {
+      toast({
+        title: "Could not delete scene",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleLockScene = async (sceneId) => {
+    try {
+      const updated = await lockScene(sceneId);
+      patchScene(updated);
+      toast({ title: "Scene locked" });
+    } catch (error) {
+      toast({
+        title: "Could not lock scene",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleUnlockScene = async (sceneId) => {
+    try {
+      const updated = await unlockScene(sceneId);
+      patchScene(updated);
+      toast({ title: "Scene unlocked" });
+    } catch (error) {
+      toast({
+        title: "Could not unlock scene",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Character management
+  const handleAddCharacter = async (character) => {
+    try {
+      setCharLoading(true);
+      const created = await createCharacter(seriesId, character);
+      setCharacters((prev) => [...prev, created]);
+      toast({ title: "Character added" });
+    } catch (error) {
+      toast({
+        title: "Could not add character",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setCharLoading(false);
+    }
+  };
+
+  const handleUpdateCharacter = async (characterId, character) => {
+    try {
+      setCharLoading(true);
+      const updated = await updateCharacter(characterId, character);
+      setCharacters((prev) =>
+        prev.map((c) => (c.id === characterId ? { ...c, ...updated } : c))
+      );
+      toast({ title: "Character updated" });
+    } catch (error) {
+      toast({
+        title: "Could not update character",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setCharLoading(false);
+    }
+  };
+
+  const handleDeleteCharacter = async (characterId) => {
+    try {
+      setCharLoading(true);
+      await deleteCharacter(characterId);
+      setCharacters((prev) => prev.filter((c) => c.id !== characterId));
+      toast({ title: "Character deleted" });
+    } catch (error) {
+      toast({
+        title: "Could not delete character",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setCharLoading(false);
+    }
+  };
+
+  // Episode management
+  const handleAddEpisode = async ({ title }) => {
+    try {
+      setEpisodeLoading(true);
+      const nextNum = episodes.length + 1;
+      const created = await createEpisode(seriesId, {
+        title: title || `Episode ${nextNum}`,
+        episode_number: nextNum,
+      });
+      setEpisodes((prev) => [...prev, created]);
+      selectEpisode(created);
+      setEpisodeModalOpen(false);
+      toast({ title: "Episode added" });
+    } catch (error) {
+      toast({
+        title: "Could not add episode",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setEpisodeLoading(false);
+    }
+  };
+
+  // Export handlers
+  const handleExportStart = (platforms) => {
+    toast({ title: `Starting export to ${platforms.length} platform(s)...` });
+  };
+
+  const handleExportComplete = (results) => {
+    const successful = results.filter((r) => r.success);
+    if (successful.length > 0) {
+      toast({ title: `Exported to ${successful.length} platform(s)` });
+    }
+    const failed = results.filter((r) => !r.success);
+    failed.forEach((f) => {
+      toast({
+        title: `Export failed: ${f.platform}`,
+        description: f.error,
+        variant: "destructive",
+      });
+    });
   };
 
   if (loading) {
@@ -272,6 +424,7 @@ export default function Editor() {
 
   return (
     <div className="flex h-screen flex-col bg-paper">
+      {/* Header */}
       <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-mist px-6 py-3">
         <Link to="/" className="font-display text-[18px] font-medium tracking-tight-bold text-ink">
           Dysentry
@@ -282,16 +435,22 @@ export default function Editor() {
           <Button variant="outline" className="px-4 py-2 text-[13px]" onClick={() => setStyleOpen(true)}>
             <Palette className="h-4 w-4" /> Style
           </Button>
-          <Button variant="outline" className="px-4 py-2 text-[13px]" onClick={handleSave}>
-            Save
+          <Button variant="outline" className="px-4 py-2 text-[13px]" onClick={handleSave} disabled={saving}>
+            {saving ? "Saving..." : "Save"}
           </Button>
-          <ExportMenu onExport={handleExport} />
+          <ExportMenu 
+            episode={selectedEp} 
+            onExportStart={handleExportStart}
+            onExportComplete={handleExportComplete}
+          />
         </div>
       </header>
 
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-mist px-6 py-3">
+      {/* Episode & Character Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-mist px-6 py-3">
+        {/* Episodes */}
         <div className="flex items-center gap-3">
-          <span className="text-[11px] text-steel">Episode</span>
+          <span className="text-[11px] text-steel">Episodes</span>
           <div className="flex flex-wrap items-center gap-1">
             {episodes.map((episode) => (
               <button
@@ -302,34 +461,31 @@ export default function Editor() {
                 {String(episode.episode_number).padStart(2, "0")}
               </button>
             ))}
-            {episodes.length === 0 && <span className="text-[13px] text-steel">No episodes</span>}
+            <button
+              onClick={() => setEpisodeModalOpen(true)}
+              className="ml-1 flex h-7 w-7 items-center justify-center rounded border border-dashed border-fog text-steel hover:border-ash hover:text-ink transition-colors"
+              title="Add episode"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
           </div>
         </div>
-        {characters.length > 0 && (
-          <div className="ml-auto flex items-center gap-2">
-            <span className="text-[11px] text-steel">Cast</span>
-            <div className="flex flex-wrap items-center gap-1.5">
-              {characters.map((character) => (
-                <button
-                  key={character.id}
-                  onClick={() => {
-                    setActiveChar(character);
-                    setCharOpen(true);
-                  }}
-                  title={character.name}
-                  className="flex items-center gap-1.5 rounded-full border border-fog py-1 pl-1 pr-3 transition-colors hover:border-ash"
-                >
-                  <div className="flex h-6 w-6 items-center justify-center rounded-full bg-ink text-[11px] font-medium text-white">
-                    {character.name?.[0]}
-                  </div>
-                  <span className="text-[12px] text-ink">{character.name}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
+
+        {/* Cast */}
+        <button
+          onClick={() => setCharSheetOpen(true)}
+          className="flex items-center gap-2 rounded-lg border border-fog px-3 py-2 text-sm text-steel hover:border-ash hover:text-ink transition-colors"
+        >
+          <Users className="h-4 w-4" />
+          <span>Cast</span>
+          {characters.length > 0 && (
+            <span className="rounded-full bg-ink px-1.5 py-0.5 text-[11px] text-white">
+              {characters.length}
+            </span>
+        </button>
       </div>
 
+      {/* Main Content Grid */}
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[280px_1fr_340px]">
         <div className="min-h-0 border-r border-mist">
           <SceneList
@@ -338,6 +494,9 @@ export default function Editor() {
             onSelect={(id) => setSelectedScene(scenes.find((scene) => scene.id === id) || null)}
             onAdd={handleAddScene}
             adding={adding}
+            onDelete={handleDeleteScene}
+            onLock={handleLockScene}
+            onUnlock={handleUnlockScene}
           />
         </div>
         <div className="min-h-0 overflow-hidden border-r border-mist">
@@ -361,7 +520,24 @@ export default function Editor() {
         </div>
       </div>
 
-      <CharacterDialog character={activeChar} open={charOpen} onOpenChange={setCharOpen} />
+      {/* Dialogs & Sheets */}
+      <CharacterSheet
+        open={charSheetOpen}
+        onOpenChange={setCharSheetOpen}
+        characters={characters}
+        onAddCharacter={handleAddCharacter}
+        onUpdateCharacter={handleUpdateCharacter}
+        onDeleteCharacter={handleDeleteCharacter}
+        loading={charLoading}
+      />
+      
+      <EpisodeAddModal
+        open={episodeModalOpen}
+        onOpenChange={setEpisodeModalOpen}
+        onAdd={handleAddEpisode}
+        loading={episodeLoading}
+      />
+      
       <StyleMemoryDialog
         open={styleOpen}
         onOpenChange={setStyleOpen}
