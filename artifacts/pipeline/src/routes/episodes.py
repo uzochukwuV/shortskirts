@@ -1,5 +1,8 @@
 import json
+from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel
+from job_queue import enqueue_job, WORKLOAD_ASSEMBLY
 from db.connection import get_pool
 from models.story import EpisodeResponse, SceneResponse
 from auth import get_current_user, user_id
@@ -137,3 +140,122 @@ async def get_episode(episode_id: str, user=Depends(get_current_user)):
         scenes=scenes,
         created_at=row["created_at"],
     )
+
+
+class BulkApproveResponse(BaseModel):
+    episode_id: str
+    approved_scene_ids: list[str]
+    skipped_scene_ids: list[str]
+    all_approved: bool
+
+
+class AssembleResponse(BaseModel):
+    episode_id: str
+    job_id: str
+    status: str
+    message: str
+
+
+@router.post("/{episode_id}/bulk-approve", response_model=BulkApproveResponse)
+async def bulk_approve_episode_scenes(episode_id: str, user=Depends(get_current_user)):
+    """Approve every scene in an episode whose approval_status is pending or pending_review.
+
+    Skips locked scenes and scenes already approved. Returns the lists of approved vs
+    skipped scene IDs so the editor can highlight what changed.
+    """
+    pool = await get_pool()
+    owner_row = await pool.fetchrow(
+        """SELECT e.id FROM episodes e
+           JOIN stories s ON s.id = e.story_id
+           WHERE e.id=$1 AND s.owner_id=$2""",
+        episode_id,
+        user_id(user),
+    )
+    if not owner_row:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    rows = await pool.fetch(
+        """UPDATE scenes
+           SET approval_status='approved', approved_at=now(), updated_at=now()
+           WHERE episode_id=$1
+             AND approval_status IN ('pending','pending_review')
+             AND (locked IS NULL OR locked = false)
+           RETURNING id""",
+        episode_id,
+    )
+    approved = [str(r["id"]) for r in rows]
+
+    skipped_rows = await pool.fetch(
+        """SELECT id, approval_status, locked FROM scenes WHERE episode_id=$1""",
+        episode_id,
+    )
+    skipped = [str(r["id"]) for r in skipped_rows if str(r["id"]) not in approved]
+
+    remaining = await pool.fetchval(
+        """SELECT COUNT(*) FROM scenes
+           WHERE episode_id=$1 AND approval_status <> 'approved'""",
+        episode_id,
+    )
+    return BulkApproveResponse(
+        episode_id=episode_id,
+        approved_scene_ids=approved,
+        skipped_scene_ids=skipped,
+        all_approved=int(remaining or 0) == 0,
+    )
+
+
+@router.post("/{episode_id}/assemble", response_model=AssembleResponse)
+async def assemble_episode(episode_id: str, user=Depends(get_current_user)):
+    """Assemble the episode video from its approved scenes.
+
+    Requires every scene to have approval_status='approved' (i.e. no pending or
+    pending_review scenes). Enqueues a new episode_assembly job on the
+    WORKLOAD_ASSEMBLY queue. The actual ffmpeg concat is handled by the worker.
+    """
+    pool = await get_pool()
+    owner_row = await pool.fetchrow(
+        """SELECT e.id, e.story_id FROM episodes e
+           JOIN stories s ON s.id = e.story_id
+           WHERE e.id=$1 AND s.owner_id=$2""",
+        episode_id,
+        user_id(user),
+    )
+    if not owner_row:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    unapproved = await pool.fetch(
+        """SELECT id, scene_number, approval_status FROM scenes
+           WHERE episode_id=$1 AND approval_status <> 'approved'
+           ORDER BY scene_number ASC""",
+        episode_id,
+    )
+    if unapproved:
+        ids = [
+            {"id": str(r["id"]), "scene_number": r["scene_number"], "approval_status": r["approval_status"]}
+            for r in unapproved
+        ]
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "All scenes must be approved before assembling the episode.",
+                "unapproved_scenes": ids,
+            },
+        )
+
+    job_row = await pool.fetchrow(
+        """INSERT INTO generation_jobs
+           (entity_type, entity_id, status, total_steps, current_step, job_type)
+           VALUES ('episode', $1, 'pending', 1, 'Queued for assembly', 'episode_assembly')
+           RETURNING id""",
+        episode_id,
+    )
+    job_id = str(job_row["id"])
+    await enqueue_job(job_id, workload=WORKLOAD_ASSEMBLY)
+
+    return AssembleResponse(
+        episode_id=episode_id,
+        job_id=job_id,
+        status="pending",
+        message="Episode assembly queued.",
+    )
+

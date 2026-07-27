@@ -39,7 +39,7 @@ function setToken(token) {
   window.localStorage.setItem(TOKEN_KEY, token);
 }
 
-async function request(path, options = {}) {
+export async function request(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (!headers.has("Content-Type") && options.body) {
     headers.set("Content-Type", "application/json");

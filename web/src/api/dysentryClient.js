@@ -1,14 +1,26 @@
 import db from "@/api/base44Client";
-
+import {request} from "@/api/base44Client"
 // Use the centralized request from base44Client
 // Auth errors (401/403) are handled by base44Client
-const request = db.request;
 
+
+function hasSceneMedia(scene) {
+  return !!(scene.media_url || scene.clip_url || scene.image_url);
+}
+
+/**
+ * Map backend scene fields to a single editor workflow status.
+ * draft → regenerating → ready → pending_review → approved
+ * rejected can appear after a review pass.
+ */
 function frontendSceneStatus(scene) {
   if (scene.status === "running") return "regenerating";
   if (scene.approval_status === "approved") return "approved";
   if (scene.approval_status === "pending_review") return "pending_review";
-  if (scene.approval_status === "rejected") return "draft";
+  if (scene.approval_status === "rejected") return "rejected";
+  if (hasSceneMedia(scene) && (scene.status === "completed" || scene.status === "done")) {
+    return "ready";
+  }
   return "draft";
 }
 
@@ -54,6 +66,7 @@ export function mapEpisodeToEditorEpisode(episode) {
 
 export function mapSceneToEditorScene(scene) {
   const script = scene.description || scene.prompt || "";
+  const mediaUrl = scene.media_url || scene.clip_url || scene.image_url || null;
   return {
     id: scene.id,
     episode_id: scene.episode_id,
@@ -66,11 +79,16 @@ export function mapSceneToEditorScene(scene) {
     prompt: scene.prompt || script,
     visual_prompt: scene.visual_prompt || scene.prompt || "",
     narration: scene.narration || "",
-    checkpoint_notes: "",
+    mood: scene.mood || "",
+    location: scene.location || "",
+    checkpoint_notes: scene.checkpoint_notes || scene.reviewer_notes || "",
     status: frontendSceneStatus(scene),
-    media_url: scene.media_url || scene.clip_url || scene.image_url || null,
+    backend_status: scene.status || "draft",
+    media_url: mediaUrl,
     clip_url: scene.clip_url || null,
     image_url: scene.image_url || null,
+    duration: scene.duration ?? null,
+    regeneration_count: scene.regeneration_count || 0,
     approval_status: scene.approval_status || "pending",
     locked: !!scene.locked,
     raw: scene,
@@ -175,10 +193,15 @@ export async function disconnectSocialAccount(accountId) {
   });
 }
 
-export async function listEditorScenes(storyId, episodeId) {
-  const episodes = await request(`/pipeline/episodes/story/${storyId}`);
-  const selected = episodes.find((episode) => episode.id === episodeId);
-  return (selected?.scenes || []).map(mapSceneToEditorScene);
+export async function getEditorEpisode(episodeId) {
+  const episode = await request(`/pipeline/episodes/${episodeId}`);
+  return mapEpisodeToEditorEpisode(episode);
+}
+
+export async function listEditorScenes(_storyId, episodeId) {
+  // Prefer single-episode fetch (includes scenes) over reloading the whole story.
+  const episode = await request(`/pipeline/episodes/${episodeId}`);
+  return (episode?.scenes || []).map(mapSceneToEditorScene);
 }
 
 export async function listEditorCharacters(storyId) {
@@ -205,10 +228,12 @@ export async function saveStyleMemory(storyId, story, styleMemory) {
 export async function updateEditorScene(sceneId, scene) {
   const payload = {
     title: scene.title,
-    prompt: scene.prompt || scene.script || "",
+    prompt: scene.prompt || scene.visual_prompt || scene.script || "",
     description: scene.script || "",
     visual_prompt: scene.visual_prompt || scene.prompt || scene.script || "",
     narration: scene.narration || "",
+    mood: scene.mood || "",
+    location: scene.location || "",
     media_kind: typeToMediaKind(scene.type),
   };
   const updated = await request(`/pipeline/scenes/${sceneId}`, {
@@ -222,11 +247,13 @@ export async function createEditorScene(storyId, episodeId, scene) {
   const payload = {
     episode_id: episodeId,
     scene_number: scene.order,
-    prompt: scene.prompt || scene.script || scene.title || `Scene ${scene.order}`,
+    prompt: scene.prompt || scene.visual_prompt || scene.script || scene.title || `Scene ${scene.order}`,
     title: scene.title,
     description: scene.script || "",
     visual_prompt: scene.visual_prompt || scene.prompt || scene.script || "",
     narration: scene.narration || "",
+    mood: scene.mood || "",
+    location: scene.location || "",
     media_kind: typeToMediaKind(scene.type),
     generate: false,
   };
@@ -238,9 +265,15 @@ export async function createEditorScene(storyId, episodeId, scene) {
 }
 
 export async function regenerateEditorScene(sceneId) {
+  // Returns GenerationJobResponse: { id, status, progress, current_step, ... }
   return request(`/pipeline/scenes/${sceneId}/regenerate`, {
     method: "POST",
   });
+}
+
+export async function getEditorScene(sceneId) {
+  const scene = await request(`/pipeline/scenes/${sceneId}`);
+  return mapSceneToEditorScene(scene);
 }
 
 export async function approveEditorScene(sceneId) {
@@ -277,25 +310,52 @@ export async function deleteScene(sceneId) {
 }
 
 export async function lockScene(sceneId) {
-  return request(`/pipeline/scenes/${sceneId}/lock`, {
+  const updated = await request(`/pipeline/scenes/${sceneId}/lock`, {
     method: "PUT",
   });
+  return mapSceneToEditorScene(updated);
 }
 
 export async function unlockScene(sceneId) {
-  return request(`/pipeline/scenes/${sceneId}/unlock`, {
+  const updated = await request(`/pipeline/scenes/${sceneId}/unlock`, {
     method: "PUT",
   });
+  return mapSceneToEditorScene(updated);
 }
 
 export async function rejectScene(sceneId) {
-  return request(`/pipeline/scenes/${sceneId}/reject`, {
+  const updated = await request(`/pipeline/scenes/${sceneId}/reject`, {
     method: "PUT",
   });
+  return mapSceneToEditorScene(updated);
 }
 
 export async function getSceneJobStatus(jobId) {
-  return request(`/pipeline/runs/${jobId}`);
+  // Generation jobs live under /pipeline/jobs, not pipeline runs.
+  return request(`/pipeline/jobs/${jobId}`);
+}
+
+export async function listSceneJobs(sceneId) {
+  return request(`/pipeline/jobs/entity/scene/${sceneId}`);
+}
+
+export async function getSceneHistory(sceneId) {
+  return request(`/pipeline/scenes/${sceneId}/history`);
+}
+
+/** Poll a generation job until it finishes or the timeout elapses. */
+export async function pollSceneJob(jobId, { intervalMs = 2000, timeoutMs = 180000, onTick } = {}) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const job = await getSceneJobStatus(jobId);
+    onTick?.(job);
+    const status = (job.status || "").toLowerCase();
+    if (["completed", "failed", "cancelled", "canceled"].includes(status)) {
+      return job;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error("Timed out waiting for scene generation");
 }
 
 // Episode operations
@@ -306,6 +366,18 @@ export async function createEpisode(storyId, episodeData) {
       story_id: storyId,
       ...episodeData,
     }),
+  });
+}
+
+export async function bulkApproveEpisode(episodeId) {
+  return request(`/pipeline/episodes/${episodeId}/bulk-approve`, {
+    method: "POST",
+  });
+}
+
+export async function assembleEpisode(episodeId) {
+  return request(`/pipeline/episodes/${episodeId}/assemble`, {
+    method: "POST",
   });
 }
 

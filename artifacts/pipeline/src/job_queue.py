@@ -22,6 +22,7 @@ WORKLOAD_STORY = "story"
 WORKLOAD_MEDIA = "media"
 WORKLOAD_AUDIO = "audio"
 WORKLOAD_PUBLISH = "publish"
+WORKLOAD_ASSEMBLY = "assembly"
 WORKLOAD_SCHEDULER = "scheduler"
 WORKLOAD_ALL = "all"
 
@@ -30,6 +31,7 @@ READY_QUEUE_KEYS = {
     WORKLOAD_MEDIA: _qkey("storyforge:jobs:ready:media"),
     WORKLOAD_AUDIO: _qkey("storyforge:jobs:ready:audio"),
     WORKLOAD_PUBLISH: _qkey("storyforge:jobs:ready:publish"),
+    WORKLOAD_ASSEMBLY: _qkey("storyforge:jobs:ready:assembly"),
     WORKLOAD_SCHEDULER: _qkey("storyforge:jobs:ready:scheduler"),
 }
 DELAYED_QUEUE_KEYS = {
@@ -37,6 +39,7 @@ DELAYED_QUEUE_KEYS = {
     WORKLOAD_MEDIA: _qkey("storyforge:jobs:delayed:media"),
     WORKLOAD_AUDIO: _qkey("storyforge:jobs:delayed:audio"),
     WORKLOAD_PUBLISH: _qkey("storyforge:jobs:delayed:publish"),
+    WORKLOAD_ASSEMBLY: _qkey("storyforge:jobs:delayed:assembly"),
     WORKLOAD_SCHEDULER: _qkey("storyforge:jobs:delayed:scheduler"),
 }
 
@@ -81,6 +84,8 @@ def job_workload(entity_type: str, job_type: str | None = None) -> str:
         "scheduled_series_continuation",
     }:
         return WORKLOAD_SCHEDULER
+    if job_type == "episode_assembly":
+        return WORKLOAD_ASSEMBLY
     if entity_type == "story":
         if job_type == "checkpoint_audio":
             return WORKLOAD_AUDIO
@@ -230,6 +235,8 @@ async def recover_expired_jobs(pool: asyncpg.Pool, workload: str, limit: int = 1
         workload_clause = "(job_type = 'checkpoint_audio')"
     elif workload == WORKLOAD_PUBLISH:
         workload_clause = "(entity_type = 'publish' OR job_type IN ('publish_episode','publish_target'))"
+    elif workload == WORKLOAD_ASSEMBLY:
+        workload_clause = "(job_type = 'episode_assembly')"
     elif workload == WORKLOAD_SCHEDULER:
         workload_clause = "(entity_type = 'schedule' OR job_type IN ('scheduled_generate_only','scheduled_publish_existing','scheduled_generate_and_publish','scheduled_series_continuation'))"
     else:

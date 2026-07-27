@@ -664,6 +664,18 @@ SCHEDULER_POLL_SECONDS=60          # Scheduler poll interval
 WORKER_ID=...                      # Worker identifier
 ```
 
+### .env File Auto-Loading
+
+The backend automatically loads environment variables from a `.env` file located at the pipeline root (`artifacts/pipeline/.env`). This file is **not tracked by git** (see `.gitignore`).
+
+Copy or create `.env` from `.env.example`:
+```bash
+cd artifacts/pipeline
+copy .env.example .env
+```
+
+All Python entry points (`main.py`, `worker.py`, `scheduler.py`) call `load_dotenv()` at startup, so environment variables are available before any database or external service connections are made.
+
 ### Start Commands
 
 ```bash
