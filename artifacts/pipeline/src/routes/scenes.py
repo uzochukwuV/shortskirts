@@ -783,3 +783,48 @@ async def get_scene_history(scene_id: str, user=Depends(get_current_user)):
         scene_id,
     )
     return [_history_row_to_response(row) for row in rows]
+
+
+@router.get("/{scene_id}/job-status", response_model=GenerationJobResponse)
+async def get_scene_latest_job(scene_id: str, user=Depends(get_current_user)):
+    """Return the most recent generation_jobs row for this scene.
+
+    Used by the Dysentry editor to poll the status of a regeneration
+    after POST /pipeline/scenes/{id}/regenerate has been issued.
+    Returns 404 if no job exists yet.
+    """
+    pool = await get_pool()
+    if not await _scene_belongs_to_owner(pool, scene_id, user_id(user)):
+        raise HTTPException(status_code=404, detail="Scene not found")
+    row = await pool.fetchrow(
+        """SELECT * FROM generation_jobs
+           WHERE entity_type='scene' AND entity_id=$1
+           ORDER BY created_at DESC
+           LIMIT 1""",
+        scene_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="No generation job for this scene")
+    return GenerationJobResponse(
+        id=str(row["id"]),
+        entity_type=row["entity_type"],
+        entity_id=str(row["entity_id"]),
+        status=row["status"],
+        progress=row.get("progress") or 0,
+        total_steps=row.get("total_steps") or 1,
+        current_step=row.get("current_step") or "",
+        error=row.get("error"),
+        result=_json_object(row.get("result")) if row.get("result") else None,
+        started_at=row.get("started_at"),
+        completed_at=row.get("completed_at"),
+        created_at=row["created_at"],
+        job_type=row.get("job_type") or "scene_regen",
+        attempts=row.get("attempts") or 0,
+        max_attempts=row.get("max_attempts") or 3,
+        worker_id=row.get("worker_id"),
+        leased_at=row.get("leased_at"),
+        lease_expires_at=row.get("lease_expires_at"),
+        last_heartbeat_at=row.get("last_heartbeat_at"),
+        updated_at=row.get("updated_at"),
+    )
+

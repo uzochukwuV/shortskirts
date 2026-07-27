@@ -1,7 +1,13 @@
 import os
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+# Load .env from the pipeline root (parent of src/)
+env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+load_dotenv(env_path)
 
 from db.connection import init_db, close_pool
 from routes.stories    import router as stories_router

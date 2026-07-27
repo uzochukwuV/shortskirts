@@ -1,10 +1,16 @@
 import asyncio
 import json
 import os
+from dotenv import load_dotenv
+
 import time
 import uuid
 from datetime import datetime, timezone
 from contextlib import suppress
+from pipeline.metrics import record_pipeline_metric
+# Load .env from pipeline root
+env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
+load_dotenv(env_path)
 
 from db.connection import close_pool, get_pool, init_db
 from job_queue import (
@@ -25,7 +31,6 @@ from job_queue import (
     recover_expired_jobs,
     touch_lease,
 )
-from pipeline.metrics import record_pipeline_metric
 from pipeline.history import record_checkpoint_history, record_scene_history, record_story_history
 from pipeline.job_handlers import (
     run_character_ref_job,

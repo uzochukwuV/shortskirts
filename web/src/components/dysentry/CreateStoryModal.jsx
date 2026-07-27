@@ -60,7 +60,7 @@ export default function CreateStoryModal({ open, onOpenChange }) {
     e.preventDefault();
     setError("");
     setLoading(true);
-
+    console.log("story")
     try {
       const story = await createStory({
         ...form,
