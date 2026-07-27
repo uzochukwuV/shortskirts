@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Palette, Users, Plus, CheckCircle2, Clapperboard, Loader2 } from "lucide-react";
+import { Palette, Users, Plus, CheckCircle2, Clapperboard, Loader2, FileText, PlayCircle, PauseCircle, XCircle, Info } from "lucide-react";
 
 import { useToast } from "@/components/ui/use-toast";
+import { Badge } from "@/components/ui/badge";
 import Button from "@/components/dysentry/Button";
 import Breadcrumb from "@/components/dysentry/Breadcrumb";
 import SceneList from "@/components/dysentry/editor/SceneList";
@@ -12,6 +13,8 @@ import ExportMenu from "@/components/dysentry/editor/ExportMenu";
 import CharacterSheet from "@/components/dysentry/editor/CharacterSheet";
 import EpisodeAddModal from "@/components/dysentry/editor/EpisodeAddModal";
 import StyleMemoryDialog from "@/components/dysentry/editor/StyleMemoryDialog";
+import StoryDetailsSheet from "@/components/dysentry/editor/StoryDetailsSheet";
+import CheckpointReviewSheet from "@/components/dysentry/editor/CheckpointReviewSheet";
 import {
   approveEditorScene,
   assembleEpisode,
@@ -36,7 +39,25 @@ import {
   unlockScene,
   updateCharacter,
   updateEditorScene,
+  approveStoryOutline,
+  startStoryGeneration,
+  cancelStoryJob,
+  getStoryCheckpoints,
+  approveCheckpoint,
+  regenerateCheckpointAudio,
+  getNarrationVoices,
+  getStoryHistory,
+  getEditorEpisode,
 } from "@/api/dysentryClient";
+
+const STORY_STATUS_CONFIG = {
+  draft: { label: "Draft", color: "bg-amber-100 text-amber-800 border-amber-200" },
+  approved: { label: "Approved", color: "bg-blue-100 text-blue-800 border-blue-200" },
+  generating: { label: "Generating", color: "bg-purple-100 text-purple-800 border-purple-200" },
+  checkpoint_review: { label: "Review", color: "bg-orange-100 text-orange-800 border-orange-200" },
+  completed: { label: "Completed", color: "bg-emerald-100 text-emerald-800 border-emerald-200" },
+  failed: { label: "Failed", color: "bg-red-100 text-red-800 border-red-200" },
+};
 
 function sceneContentKey(scene) {
   if (!scene) return "";
@@ -75,8 +96,21 @@ export default function Editor() {
   const [savedContentKey, setSavedContentKey] = useState("");
   const [bulkApproving, setBulkApproving] = useState(false);
   const [assembling, setAssembling] = useState(false);
+  
+  // New state for Phase 1
+  const [storyDetailsOpen, setStoryDetailsOpen] = useState(false);
+  const [checkpointSheetOpen, setCheckpointSheetOpen] = useState(false);
+  const [checkpoints, setCheckpoints] = useState([]);
+  const [voices, setVoices] = useState([]);
+  const [selectedVoice, setSelectedVoice] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [outlineApproving, setOutlineApproving] = useState(false);
+  const [checkpointApproving, setCheckpointApproving] = useState(false);
+  const [loadingCheckpointId, setLoadingCheckpointId] = useState(null);
+  
   const pollCancelRef = useRef(0);
   const saveHandlerRef = useRef(null);
+  const generationPollRef = useRef(0);
 
   const dirty = useMemo(() => {
     if (!selectedScene) return false;
@@ -115,22 +149,56 @@ export default function Editor() {
   );
 
   const loadAll = useCallback(async () => {
-    const [story, eps, chars] = await Promise.all([
-      getEditorStory(seriesId),
-      listEditorEpisodes(seriesId),
-      listEditorCharacters(seriesId),
-    ]);
-    setSeries(story);
-    setEpisodes(eps);
-    setCharacters(chars);
-    const firstEpisode = eps[0] || null;
-    setSelectedEp(firstEpisode);
-    if (firstEpisode) {
-      await loadEpisodeScenes(firstEpisode.id);
-    } else {
-      setScenes([]);
-      setSelectedScene(null);
-      setSavedContentKey("");
+    try {
+      const [story, eps, chars, checkpointList, voiceData] = await Promise.all([
+        getEditorStory(seriesId),
+        listEditorEpisodes(seriesId),
+        listEditorCharacters(seriesId),
+        getStoryCheckpoints(seriesId).catch(() => []),
+        getNarrationVoices().catch(() => ({ voices: [] })),
+      ]);
+      
+      // Store raw story data for StoryDetailsSheet
+      const storyWithRaw = {
+        ...story,
+        raw: story.raw || {},
+      };
+      
+      // If raw doesn't have episode_plan, fetch full story
+      if (!storyWithRaw.raw.episode_plan) {
+        try {
+          const fullStory = await getEditorStory(seriesId);
+          storyWithRaw.raw = { ...storyWithRaw.raw, ...fullStory.raw };
+        } catch (e) {
+          console.error("Failed to fetch full story:", e);
+        }
+      }
+      
+      setSeries(storyWithRaw);
+      setEpisodes(eps);
+      setCharacters(chars);
+      setCheckpoints(checkpointList || []);
+      if (voiceData?.voices) {
+        setVoices(voiceData.voices);
+        setSelectedVoice(voiceData.default_voice || voiceData.voices[0]?.id || "");
+      }
+      
+      const firstEpisode = eps[0] || null;
+      setSelectedEp(firstEpisode);
+      if (firstEpisode) {
+        await loadEpisodeScenes(firstEpisode.id);
+      } else {
+        setScenes([]);
+        setSelectedScene(null);
+        setSavedContentKey("");
+      }
+      
+      // Update generation state based on story status
+      const status = storyWithRaw.raw?.status;
+      setGenerating(status === "generating");
+    } catch (error) {
+      console.error("Failed to load editor data:", error);
+      throw error;
     }
   }, [seriesId, loadEpisodeScenes]);
 
@@ -690,6 +758,122 @@ export default function Editor() {
     });
   };
 
+  // Phase 1: Generation handlers
+  const handleApproveOutline = async () => {
+    if (!series) return;
+    setOutlineApproving(true);
+    try {
+      const updated = await approveStoryOutline(seriesId);
+      // Refresh story data
+      const fullStory = await getEditorStory(seriesId);
+      setSeries({ ...series, raw: { ...series.raw, ...fullStory.raw, status: updated.status || "approved" } });
+      toast({ title: "Outline approved", description: "Ready to generate episodes." });
+    } catch (error) {
+      toast({
+        title: "Could not approve outline",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setOutlineApproving(false);
+    }
+  };
+
+  const handleStartGeneration = async () => {
+    if (!series) return;
+    setGenerating(true);
+    try {
+      const job = await startStoryGeneration(seriesId);
+      toast({ title: "Generation started", description: job.current_step || "Creating episodes..." });
+      // Refresh story to update status
+      await loadAll();
+    } catch (error) {
+      setGenerating(false);
+      toast({
+        title: "Could not start generation",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleCancelGeneration = async () => {
+    const ok = window.confirm("Cancel the current generation? Progress may be lost.");
+    if (!ok) return;
+    try {
+      await cancelStoryJob(seriesId);
+      setGenerating(false);
+      toast({ title: "Generation cancelled" });
+      await loadAll();
+    } catch (error) {
+      toast({
+        title: "Could not cancel",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleOpenCheckpointSheet = async () => {
+    // Refresh checkpoints before opening
+    try {
+      const checkpoints = await getStoryCheckpoints(seriesId);
+      setCheckpoints(checkpoints || []);
+    } catch (e) {
+      console.error("Failed to fetch checkpoints:", e);
+    }
+    setCheckpointSheetOpen(true);
+  };
+
+  const handleApproveCheckpoint = async (checkpoint) => {
+    setLoadingCheckpointId(checkpoint.id);
+    try {
+      await approveCheckpoint(seriesId, checkpoint.id);
+      toast({ title: "Checkpoint approved", description: "Generation will continue." });
+      // Refresh checkpoints
+      const checkpoints = await getStoryCheckpoints(seriesId);
+      setCheckpoints(checkpoints || []);
+      // Refresh story
+      await loadAll();
+    } catch (error) {
+      toast({
+        title: "Could not approve checkpoint",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setLoadingCheckpointId(null);
+    }
+  };
+
+  const handleRegenerateCheckpointAudio = async (checkpoint) => {
+    setLoadingCheckpointId(checkpoint.id);
+    try {
+      await regenerateCheckpointAudio(seriesId, checkpoint.id, {
+        narration_voice: selectedVoice || undefined,
+      });
+      toast({ title: "Audio regeneration started" });
+      // Refresh checkpoints
+      const checkpoints = await getStoryCheckpoints(seriesId);
+      setCheckpoints(checkpoints || []);
+    } catch (error) {
+      toast({
+        title: "Could not regenerate audio",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setLoadingCheckpointId(null);
+    }
+  };
+
+  // Computed values
+  const storyStatus = series?.raw?.status || "draft";
+  const canApproveOutline = storyStatus === "draft";
+  const canStartGeneration = storyStatus === "approved";
+  const canShowCheckpoints = storyStatus === "generating" || storyStatus === "checkpoint_review";
+  const pendingCheckpoints = checkpoints.filter(c => c.status === "pending").length;
+
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center">
@@ -714,7 +898,97 @@ export default function Editor() {
         </Link>
         <span className="text-ash">/</span>
         <Breadcrumb items={[{ label: "Studio", path: "/dashboard" }, { label: series.title }]} />
+        
+        {/* Story Status Badge */}
+        <Badge className={`${STORY_STATUS_CONFIG[storyStatus]?.color || STORY_STATUS_CONFIG.draft.color} gap-1.5`}>
+          {storyStatus === "generating" && <Loader2 className="h-3 w-3 animate-spin" />}
+          {STORY_STATUS_CONFIG[storyStatus]?.label || storyStatus}
+        </Badge>
+        
         <div className="ml-auto flex items-center gap-2">
+          {/* Generation Controls */}
+          <div className="flex items-center gap-1.5">
+            {/* Story Details Button */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="px-3 py-1.5 text-[12px]"
+              onClick={() => setStoryDetailsOpen(true)}
+            >
+              <Info className="h-3.5 w-3.5" />
+              Details
+            </Button>
+
+            {/* Approve Outline (when draft) */}
+            {canApproveOutline && (
+              <Button
+                variant="default"
+                size="sm"
+                className="px-3 py-1.5 text-[12px] gap-1.5"
+                onClick={handleApproveOutline}
+                disabled={outlineApproving}
+              >
+                {outlineApproving ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                )}
+                Approve Outline
+              </Button>
+            )}
+
+            {/* Start Generation (when approved) */}
+            {canStartGeneration && (
+              <Button
+                variant="default"
+                size="sm"
+                className="px-3 py-1.5 text-[12px] gap-1.5"
+                onClick={handleStartGeneration}
+                disabled={generating}
+              >
+                {generating ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <PlayCircle className="h-3.5 w-3.5" />
+                )}
+                Generate
+              </Button>
+            )}
+
+            {/* Cancel Generation (when generating) */}
+            {storyStatus === "generating" && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="px-3 py-1.5 text-[12px] text-red-600 hover:text-red-700 gap-1.5"
+                onClick={handleCancelGeneration}
+              >
+                <XCircle className="h-3.5 w-3.5" />
+                Cancel
+              </Button>
+            )}
+
+            {/* Checkpoints Button (when generating/checkpoint_review) */}
+            {canShowCheckpoints && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="px-3 py-1.5 text-[12px] gap-1.5 relative"
+                onClick={handleOpenCheckpointSheet}
+              >
+                <PauseCircle className="h-3.5 w-3.5" />
+                Checkpoints
+                {pendingCheckpoints > 0 && (
+                  <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-orange-500 text-[10px] text-white font-bold">
+                    {pendingCheckpoints}
+                  </span>
+                )}
+              </Button>
+            )}
+          </div>
+
+          <div className="h-6 w-px bg-mist mx-1" />
+
           <Button variant="outline" className="px-4 py-2 text-[13px]" onClick={() => setStyleOpen(true)}>
             <Palette className="h-4 w-4" /> Style
           </Button>
@@ -895,6 +1169,30 @@ export default function Editor() {
         onOpenChange={setStyleOpen}
         value={series?.style_memory}
         onSave={handleStyleSave}
+      />
+
+      {/* Story Details Sheet - Outline & Generation Controls */}
+      <StoryDetailsSheet
+        open={storyDetailsOpen}
+        onOpenChange={setStoryDetailsOpen}
+        series={series}
+        onApproveOutline={handleApproveOutline}
+        loading={outlineApproving}
+      />
+
+      {/* Checkpoint Review Sheet */}
+      <CheckpointReviewSheet
+        open={checkpointSheetOpen}
+        onOpenChange={setCheckpointSheetOpen}
+        checkpoints={checkpoints}
+        storyId={seriesId}
+        onApproveCheckpoint={handleApproveCheckpoint}
+        onRegenerateAudio={handleRegenerateCheckpointAudio}
+        loading={checkpointApproving}
+        loadingCheckpointId={loadingCheckpointId}
+        voices={voices}
+        selectedVoice={selectedVoice}
+        onVoiceChange={setSelectedVoice}
       />
     </div>
   );

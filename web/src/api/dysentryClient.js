@@ -416,3 +416,75 @@ export async function exportEpisode(episodeId, platform) {
     body: JSON.stringify({ platform }),
   });
 }
+
+// Story generation operations
+export async function approveStoryOutline(storyId) {
+  return request(`/pipeline/stories/${storyId}/approve-outline`, {
+    method: "PUT",
+  });
+}
+
+export async function startStoryGeneration(storyId) {
+  return request(`/pipeline/stories/${storyId}/generate`, {
+    method: "POST",
+  });
+}
+
+export async function cancelStoryJob(storyId) {
+  // Get the active job for this story and cancel it
+  const jobs = await request(`/pipeline/jobs/entity/story/${storyId}`);
+  const activeJob = jobs.find(
+    (j) => j.status === "running" || j.status === "pending"
+  );
+  if (activeJob) {
+    return request(`/pipeline/jobs/${activeJob.id}/cancel`, {
+      method: "POST",
+    });
+  }
+  return { message: "No active job found" };
+}
+
+export async function getStoryCheckpoints(storyId) {
+  return request(`/pipeline/stories/${storyId}/checkpoints`);
+}
+
+export async function approveCheckpoint(storyId, checkpointId) {
+  return request(`/pipeline/stories/${storyId}/checkpoints/${checkpointId}/approve`, {
+    method: "PUT",
+  });
+}
+
+export async function regenerateCheckpointAudio(storyId, checkpointId, options = {}) {
+  return request(`/pipeline/stories/${storyId}/checkpoints/${checkpointId}/audio/regenerate`, {
+    method: "POST",
+    body: JSON.stringify(options),
+  });
+}
+
+export async function getNarrationVoices() {
+  return request("/pipeline/narration/voices");
+}
+
+export async function getStoryHistory(storyId) {
+  return request(`/pipeline/stories/${storyId}/history`);
+}
+
+export async function getStoryRuns(storyId) {
+  return request(`/pipeline/runs/story/${storyId}`);
+}
+
+export async function getJobStatus(jobId) {
+  return request(`/pipeline/jobs/${jobId}`);
+}
+
+export async function cancelJob(jobId) {
+  return request(`/pipeline/jobs/${jobId}/cancel`, {
+    method: "POST",
+  });
+}
+
+export async function retryJob(jobId) {
+  return request(`/pipeline/jobs/${jobId}/retry`, {
+    method: "POST",
+  });
+}
