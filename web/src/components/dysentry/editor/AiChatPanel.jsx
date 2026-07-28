@@ -22,9 +22,52 @@ function patchPreview(scenePatch) {
     .join("\n\n");
 }
 
-function hasPatchContent(scenePatch) {
+function stripSystemContext(text) {
+  if (!text) return '';
+  // Remove system-added context patterns that are appended by the pipeline
+  return text
+    .replace(/\s*Location:\s*[^.]+\.+\s*/gi, '')
+    .replace(/\s*Mood:\s*[^.]+\.+\s*/gi, '')
+    .replace(/\s*Action:\s*[^.]+\.+\s*/gi, '')
+    .replace(/\s*Style:\s*[^.]+\.+\s*/gi, '')
+    .replace(/\s*Frame ratio:\s*\S+\s*/gi, '')
+    .replace(/\s*Maintain continuity.*$/gim, '')
+    .replace(/\.\s*\.\s*/g, '. ')  // Fix double periods
+    .replace(/\s*\n+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isSignificantPatch(scenePatch, currentScene) {
   if (!scenePatch || typeof scenePatch !== "object") return false;
-  return Object.values(scenePatch).some((v) => typeof v === "string" && v.trim());
+  // Only show patch buttons if the patch actually differs from current scene
+  // Note: editor uses 'script' for description, 'visual_prompt' for prompt field
+  // Also strip system-added context (Location, Mood, Action, Style) before comparing visual_prompt
+  const comparableFields = [
+    { patch: 'title', current: 'title', strip: false },
+    { patch: 'description', current: 'script', strip: false },
+    { patch: 'script', current: 'script', strip: false },
+    { patch: 'visual_prompt', current: 'visual_prompt', strip: true },
+    { patch: 'prompt', current: 'visual_prompt', strip: true },
+    { patch: 'narration', current: 'narration', strip: false },
+    { patch: 'mood', current: 'mood', strip: false },
+    { patch: 'location', current: 'location', strip: false },
+  ];
+  
+  for (const { patch, current, strip } of comparableFields) {
+    let patchVal = (scenePatch[patch] || '').trim();
+    let currentVal = (currentScene?.[current] || '').trim();
+    
+    if (strip) {
+      patchVal = stripSystemContext(patchVal);
+      currentVal = stripSystemContext(currentVal);
+    }
+    
+    if (patchVal.toLowerCase() !== currentVal.toLowerCase()) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export default function AiChatPanel({
@@ -65,13 +108,15 @@ export default function AiChatPanel({
       const response = await requestAssistant(instruction);
       const scenePatch = response.scene_patch || {};
       const preview = patchPreview(scenePatch);
+      // Only show patch as actionable if it differs from current scene
+      const hasSignificantPatch = isSignificantPatch(scenePatch, scene);
       setMessages((current) => [
         ...current,
         {
           role: "assistant",
           text: response.message || "Drafted a scene revision.",
-          scenePatch: hasPatchContent(scenePatch) ? scenePatch : null,
-          preview,
+          scenePatch: hasSignificantPatch ? scenePatch : null,
+          preview: hasSignificantPatch ? preview : null,
         },
       ]);
     } catch (error) {
