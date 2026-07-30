@@ -26,6 +26,7 @@ from routes.pipeline_runs import router as pipeline_runs_router
 from routes.publish    import router as publish_router
 from routes.schedules  import router as schedules_router
 from routes.social     import router as social_router
+from routes.stream     import router as stream_router
 from auth              import router as auth_router
 from pipeline.media_tools import ffmpeg_available, ffmpeg_path
 
@@ -76,6 +77,7 @@ app.include_router(pipeline_runs_router)
 app.include_router(social_router)
 app.include_router(publish_router)
 app.include_router(schedules_router)
+app.include_router(stream_router)
 
 
 @app.get("/pipeline/health")
