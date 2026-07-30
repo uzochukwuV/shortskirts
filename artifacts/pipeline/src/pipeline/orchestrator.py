@@ -144,6 +144,7 @@ async def _process_episode_scenes_parallel(
 ) -> tuple[list[dict], str | None, str, list[tuple[int, int, str]]]:
     """
     Process all scenes in an episode in parallel for maximum speedup.
+    Uses staged parallelization: first scene goes first, then remaining scenes in parallel.
     Returns: (checkpoint_scenes, last_exit_frame, last_summary, failed_scenes)
     """
     ep_id = await _ensure_episode_row(pool, story_id, ep_plan)
@@ -152,36 +153,24 @@ async def _process_episode_scenes_parallel(
     current_exit_frame = previous_exit_frame
     current_summary = previous_summary
 
-    # Prepare all scene tasks
-    async def generate_single_scene(
-        scene_plan: dict,
-        scene_index: int,
-        is_first_scene: bool,
-    ) -> tuple[dict | None, str | None, str | None, tuple[int, int, str] | None]:
-        """Generate a single scene. Returns (checkpoint_scene, exit_frame, summary, failure)."""
-        scene_num = scene_plan["scene_number"]
-        
-        # For first scene of episode, use previous episode's exit frame
-        # For subsequent scenes, we need to wait for previous scene's exit frame
-        scene_previous_exit = current_exit_frame if is_first_scene else None
-        
-        # NOTE: In parallel mode, we pass None for non-first scenes and accept potential
-        # continuity issues. For strict continuity, use sequential mode.
-        
+    # For strict continuity, process scenes sequentially
+    # For performance, process first scene then remaining in parallel
+    if len(scene_plans) == 1:
+        # Single scene - just process it directly
         try:
-            return await _generate_single_scene_internal(
+            result = await _generate_single_scene_internal(
                 pool=pool,
                 story=story,
                 story_id=story_id,
                 ep_id=ep_id,
                 ep_plan=ep_plan,
-                scene_plan=scene_plan,
-                scene_num=scene_num,
+                scene_plan=scene_plans[0],
+                scene_num=scene_plans[0]["scene_number"],
                 episode_number=episode_number,
                 char_map=char_map,
                 story_scene_refs=story_scene_refs,
-                previous_exit_frame=scene_previous_exit,
-                previous_summary=current_summary if is_first_scene else scene_plan.get("description", ""),
+                previous_exit_frame=current_exit_frame,
+                previous_summary=current_summary,
                 missing_ref_characters=missing_ref_characters,
                 is_narrated_image_story=is_narrated_image_story,
                 narration_model=narration_model,
@@ -191,36 +180,118 @@ async def _process_episode_scenes_parallel(
                 run_id=run_id,
                 job_id=job_id,
             )
+            cp_scene, exit_frame, summary, failure = result
+            if failure:
+                failed_scene_numbers.append(failure)
+            else:
+                if cp_scene:
+                    checkpoint_scenes.append(cp_scene)
+                if exit_frame:
+                    current_exit_frame = exit_frame
+                if summary:
+                    current_summary = summary
         except Exception as e:
-            return None, None, None, (episode_number, scene_num, str(e)[:300])
-
-    # Generate all scenes in parallel
-    tasks = [
-        generate_single_scene(scene_plan, idx, idx == 0)
-        for idx, scene_plan in enumerate(scene_plans)
-    ]
-    
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    # Process results and find last successful exit frame
-    for idx, result in enumerate(results):
-        if isinstance(result, Exception):
-            scene_num = scene_plans[idx]["scene_number"]
-            failed_scene_numbers.append((episode_number, scene_num, str(result)[:300]))
-            continue
-            
-        checkpoint_scene, exit_frame, summary, failure = result
+            failed_scene_numbers.append((episode_number, scene_plans[0]["scene_number"], str(e)[:300]))
+    else:
+        # Multiple scenes - use staged parallelization:
+        # 1. First process the first scene with episode's previous exit frame
+        # 2. Then process remaining scenes in parallel with the first scene's exit frame
         
-        if failure:
-            failed_scene_numbers.append(failure)
-            continue
+        first_scene_plan = scene_plans[0]
+        
+        # Stage 1: Generate first scene with continuity from previous episode
+        try:
+            first_result = await _generate_single_scene_internal(
+                pool=pool,
+                story=story,
+                story_id=story_id,
+                ep_id=ep_id,
+                ep_plan=ep_plan,
+                scene_plan=first_scene_plan,
+                scene_num=first_scene_plan["scene_number"],
+                episode_number=episode_number,
+                char_map=char_map,
+                story_scene_refs=story_scene_refs,
+                previous_exit_frame=current_exit_frame,
+                previous_summary=current_summary,
+                missing_ref_characters=missing_ref_characters,
+                is_narrated_image_story=is_narrated_image_story,
+                narration_model=narration_model,
+                narration_voice=narration_voice,
+                workflow_version=workflow_version,
+                generation_version=generation_version,
+                run_id=run_id,
+                job_id=job_id,
+            )
+            first_cp, first_exit, first_summary, first_failure = first_result
+            if first_failure:
+                failed_scene_numbers.append(first_failure)
+            else:
+                if first_cp:
+                    checkpoint_scenes.append(first_cp)
+                if first_exit:
+                    current_exit_frame = first_exit
+                if first_summary:
+                    current_summary = first_summary
+        except Exception as e:
+            failed_scene_numbers.append((episode_number, first_scene_plan["scene_number"], str(e)[:300]))
+            # If first scene fails, remaining scenes can't have proper continuity
+            current_exit_frame = None
+        
+        # Stage 2: Generate remaining scenes in parallel with first scene's exit frame
+        if len(scene_plans) > 1 and current_exit_frame:
+            remaining_tasks = []
+            for scene_plan in scene_plans[1:]:
+                scene_num = scene_plan["scene_number"]
+                try:
+                    task = _generate_single_scene_internal(
+                        pool=pool,
+                        story=story,
+                        story_id=story_id,
+                        ep_id=ep_id,
+                        ep_plan=ep_plan,
+                        scene_plan=scene_plan,
+                        scene_num=scene_num,
+                        episode_number=episode_number,
+                        char_map=char_map,
+                        story_scene_refs=story_scene_refs,
+                        # Use first scene's exit frame for all remaining scenes
+                        previous_exit_frame=current_exit_frame,
+                        previous_summary=scene_plan.get("description", ""),
+                        missing_ref_characters=missing_ref_characters,
+                        is_narrated_image_story=is_narrated_image_story,
+                        narration_model=narration_model,
+                        narration_voice=narration_voice,
+                        workflow_version=workflow_version,
+                        generation_version=generation_version,
+                        run_id=run_id,
+                        job_id=job_id,
+                    )
+                    remaining_tasks.append(task)
+                except Exception as e:
+                    failed_scene_numbers.append((episode_number, scene_num, str(e)[:300]))
             
-        if checkpoint_scene:
-            checkpoint_scenes.append(checkpoint_scene)
-        if exit_frame:
-            current_exit_frame = exit_frame
-        if summary:
-            current_summary = summary
+            if remaining_tasks:
+                results = await asyncio.gather(*remaining_tasks, return_exceptions=True)
+                
+                for idx, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        scene_num = scene_plans[idx + 1]["scene_number"]
+                        failed_scene_numbers.append((episode_number, scene_num, str(result)[:300]))
+                        continue
+                    
+                    cp_scene, exit_frame, summary, failure = result
+                    
+                    if failure:
+                        failed_scene_numbers.append(failure)
+                        continue
+                    
+                    if cp_scene:
+                        checkpoint_scenes.append(cp_scene)
+                    if exit_frame:
+                        current_exit_frame = exit_frame
+                    if summary:
+                        current_summary = summary
     
     return checkpoint_scenes, current_exit_frame, current_summary, failed_scene_numbers
 

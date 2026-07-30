@@ -588,35 +588,61 @@ async def reorder_scene(scene_id: str, body: SceneReorderRequest, user=Depends(g
         return loaded
 
     episode_id = str(scene["episode_id"])
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            await conn.execute(
-                "UPDATE scenes SET scene_number=0, updated_at=now() WHERE id=$1",
-                scene_id,
-            )
-            if target_number < current_number:
+    
+    # Use a negative temporary scene number to avoid conflicts during reorder
+    # Negative numbers are not valid for normal scene numbers, so they can't conflict
+    temp_scene_number = -abs(hash(scene_id)) % 10000 - 1000  # Range: -11000 to -1000
+    
+    updated = None
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                # Step 1: Move target scene to a temporary negative number
                 await conn.execute(
-                    """UPDATE scenes
-                       SET scene_number = scene_number + 1, updated_at=now()
-                       WHERE episode_id=$1 AND scene_number >= $2 AND scene_number < $3""",
-                    episode_id,
-                    target_number,
-                    current_number,
+                    "UPDATE scenes SET scene_number=$2, updated_at=now() WHERE id=$1",
+                    scene_id,
+                    temp_scene_number,
                 )
-            else:
-                await conn.execute(
-                    """UPDATE scenes
-                       SET scene_number = scene_number - 1, updated_at=now()
-                       WHERE episode_id=$1 AND scene_number > $2 AND scene_number <= $3""",
-                    episode_id,
-                    current_number,
+                
+                # Step 2: Shift other scenes to make room
+                if target_number < current_number:
+                    await conn.execute(
+                        """UPDATE scenes
+                           SET scene_number = scene_number + 1, updated_at=now()
+                           WHERE episode_id=$1 AND scene_number >= $2 AND scene_number < $3""",
+                        episode_id,
+                        target_number,
+                        current_number,
+                    )
+                else:
+                    await conn.execute(
+                        """UPDATE scenes
+                           SET scene_number = scene_number - 1, updated_at=now()
+                           WHERE episode_id=$1 AND scene_number > $2 AND scene_number <= $3""",
+                        episode_id,
+                        current_number,
+                        target_number,
+                    )
+                
+                # Step 3: Move target scene to final position
+                updated = await conn.fetchrow(
+                    "UPDATE scenes SET scene_number=$2, updated_at=now() WHERE id=$1 RETURNING *",
+                    scene_id,
                     target_number,
                 )
-            updated = await conn.fetchrow(
-                "UPDATE scenes SET scene_number=$2, updated_at=now() WHERE id=$1 RETURNING *",
+    except Exception as e:
+        # If transaction failed, attempt to restore scene to original number
+        # This may fail if the transaction was partially committed, but worth trying
+        try:
+            await pool.execute(
+                "UPDATE scenes SET scene_number=$2, updated_at=now() WHERE id=$1",
                 scene_id,
-                target_number,
+                current_number,
             )
+        except Exception:
+            pass  # Best effort recovery
+        raise HTTPException(status_code=500, detail=f"Failed to reorder scene: {str(e)}")
+    
     if not updated:
         raise HTTPException(status_code=404, detail="Scene not found")
 

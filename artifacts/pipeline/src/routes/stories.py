@@ -261,42 +261,50 @@ async def _regenerate_outline(pool, story_row, owner_id: str):
             reference_context=workflow_state,
         )
 
-    updated = await pool.fetchrow(
-        """UPDATE stories
-           SET status='draft',
-               approval_status='pending_approval',
-               approved_at=NULL,
-               episode_plan=$2::jsonb,
-               updated_at=now()
-           WHERE id=$1 AND owner_id=$3
-           RETURNING *""",
-        str(story_row["id"]),
-        json.dumps(plan),
-        owner_id,
-    )
-    if not updated:
-        raise HTTPException(status_code=404, detail="Story not found")
+    # Use transaction to ensure atomicity of story update and episode inserts
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            updated = await conn.fetchrow(
+                """UPDATE stories
+                   SET status='draft',
+                       approval_status='pending_approval',
+                       approved_at=NULL,
+                       episode_plan=$2::jsonb,
+                       updated_at=now()
+                   WHERE id=$1 AND owner_id=$3
+                   RETURNING *""",
+                str(story_row["id"]),
+                json.dumps(plan),
+                owner_id,
+            )
+            if not updated:
+                raise HTTPException(status_code=404, detail="Story not found")
 
-    for ep in plan.get("episodes", []):
-        await pool.execute(
-            """INSERT INTO episodes (story_id, episode_number, title, status)
-               VALUES ($1,$2,$3,'pending')
-               ON CONFLICT (story_id, episode_number)
-               DO UPDATE SET title=EXCLUDED.title, updated_at=now()""",
-            str(updated["id"]),
-            ep["episode_number"],
-            ep.get("title", f"Episode {ep['episode_number']}"),
+            for ep in plan.get("episodes", []):
+                await conn.execute(
+                    """INSERT INTO episodes (story_id, episode_number, title, status)
+                       VALUES ($1,$2,$3,'pending')
+                       ON CONFLICT (story_id, episode_number)
+                       DO UPDATE SET title=EXCLUDED.title, updated_at=now()""",
+                    str(updated["id"]),
+                    ep["episode_number"],
+                    ep.get("title", f"Episode {ep['episode_number']}"),
+                )
+
+    # Record history after transaction commits (non-critical)
+    try:
+        await record_story_history(
+            pool,
+            story=updated,
+            event_type="outline_regenerated",
+            payload={
+                "status": updated["status"],
+                "approval_status": updated.get("approval_status"),
+            },
         )
-
-    await record_story_history(
-        pool,
-        story=updated,
-        event_type="outline_regenerated",
-        payload={
-            "status": updated["status"],
-            "approval_status": updated.get("approval_status"),
-        },
-    )
+    except Exception as e:
+        print(f"[stories] Warning: failed to record outline regeneration history: {e}")
+    
     return updated, plan
 
 
@@ -349,65 +357,73 @@ async def create_story(body: StoryCreate, user=Depends(get_current_user)):
             reference_context=workflow_state,
         )
 
-    row = await pool.fetchrow(
-        """INSERT INTO stories
-           (owner_id, title, prompt, genre, style, num_episodes, num_scenes, status,
-            workflow_type, workflow_version, generation_version, workflow_state,
-            approval_status, episode_plan)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,'v1','v1',$9::jsonb,'pending_approval',$10::jsonb)
-           RETURNING *""",
-        owner_id,
-        body.title,
-        body.prompt,
-        body.genre,
-        body.style,
-        body.num_episodes,
-        body.num_scenes,
-        body.workflow_type.value,
-        json.dumps(workflow_state),
-        json.dumps(plan),
-    )
-    story_id = str(row["id"])
-    await record_story_history(
-        pool,
-        story=row,
-        event_type="story_created",
-        payload={
-            "title": row["title"],
-            "status": row["status"],
-            "approval_status": row.get("approval_status"),
-            "workflow_type": row.get("workflow_type"),
-        },
-    )
-
-    if body.bible_ids:
-        for bid in body.bible_ids:
-            await pool.execute(
-                """UPDATE bibles SET story_id=$1, updated_at=now()
-                   WHERE id=$2 AND story_id IS NULL AND owner_id=$3""",
-                story_id,
-                bid,
+    # Use transaction to ensure atomicity of all database operations
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """INSERT INTO stories
+                   (owner_id, title, prompt, genre, style, num_episodes, num_scenes, status,
+                    workflow_type, workflow_version, generation_version, workflow_state,
+                    approval_status, episode_plan)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,'v1','v1',$9::jsonb,'pending_approval',$10::jsonb)
+                   RETURNING *""",
                 owner_id,
+                body.title,
+                body.prompt,
+                body.genre,
+                body.style,
+                body.num_episodes,
+                body.num_scenes,
+                body.workflow_type.value,
+                json.dumps(workflow_state),
+                json.dumps(plan),
             )
+            story_id = str(row["id"])
 
-    plan_characters = plan.get("characters", [])
-    if plan_characters:
-        await _insert_plan_characters(
+            if body.bible_ids:
+                for bid in body.bible_ids:
+                    await conn.execute(
+                        """UPDATE bibles SET story_id=$1, updated_at=now()
+                           WHERE id=$2 AND story_id IS NULL AND owner_id=$3""",
+                        story_id,
+                        bid,
+                        owner_id,
+                    )
+
+            plan_characters = plan.get("characters", [])
+            if plan_characters:
+                await _insert_plan_characters(
+                    conn,
+                    story_id,
+                    plan_characters,
+                    seed_ref_urls=workflow_state["character_reference_urls"] or workflow_state["style_reference_urls"],
+                )
+
+            for ep in plan.get("episodes", []):
+                await conn.execute(
+                    """INSERT INTO episodes (story_id, episode_number, title, status)
+                       VALUES ($1,$2,$3,'pending')
+                       ON CONFLICT (story_id, episode_number) DO NOTHING""",
+                    story_id,
+                    ep["episode_number"],
+                    ep.get("title", f"Episode {ep['episode_number']}"),
+                )
+
+    # History recording outside transaction (after commit) - failure here is non-critical
+    try:
+        await record_story_history(
             pool,
-            story_id,
-            plan_characters,
-            seed_ref_urls=workflow_state["character_reference_urls"] or workflow_state["style_reference_urls"],
+            story=row,
+            event_type="story_created",
+            payload={
+                "title": row["title"],
+                "status": row["status"],
+                "approval_status": row.get("approval_status"),
+                "workflow_type": row.get("workflow_type"),
+            },
         )
-
-    for ep in plan.get("episodes", []):
-        await pool.execute(
-            """INSERT INTO episodes (story_id, episode_number, title, status)
-               VALUES ($1,$2,$3,'pending')
-               ON CONFLICT (story_id, episode_number) DO NOTHING""",
-            story_id,
-            ep["episode_number"],
-            ep.get("title", f"Episode {ep['episode_number']}"),
-        )
+    except Exception as e:
+        print(f"[stories] Warning: failed to record story history: {e}")
 
     plan_data = row["episode_plan"]
     if isinstance(plan_data, str):
