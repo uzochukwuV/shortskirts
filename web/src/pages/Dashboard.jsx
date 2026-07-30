@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowRight, CalendarClock, PlayCircle, TrendingUp, Workflow, Plus } from "lucide-react";
+import { ArrowRight, CalendarClock, PlayCircle, TrendingUp, Workflow, Plus, CheckCircle, Clock, AlertCircle, Video, Image as ImageIcon } from "lucide-react";
 import AppChrome from "@/components/dysentry/AppChrome";
 import Button from "@/components/dysentry/Button";
 import { Image } from "@/components/ui/image";
 import CreateStoryModal from "@/components/dysentry/CreateStoryModal";
-import { AreaChart, Area, XAxis, ResponsiveContainer, Tooltip } from "recharts";
+import { AreaChart, Area, XAxis, ResponsiveContainer, Tooltip, BarChart, Bar } from "recharts";
 import {
   listSchedules,
   listSocialAccounts,
@@ -56,17 +56,38 @@ export default function Dashboard() {
     new Set(["draft", "approved", "checkpoint_review"]).has(episode.status),
   );
   const completedEpisodes = episodes.filter((episode) => episode.status === "completed");
+  const inProgressEpisodes = episodes.filter((episode) =>
+    new Set(["generating", "assembling", "pending"]).has(episode.status),
+  );
   const activeRuns = runs.filter((run) => run.status === "running" || run.status === "pending");
   const failedRuns = runs.filter((run) => run.status === "failed");
+  const successfulRuns = runs.filter((run) => run.status === "completed");
   const connectedAccounts = accounts.filter((account) => account.status === "connected");
   const latestStory = stories[0] || null;
-  // Chart shows episode completion status - green for completed, amber for pending
-  const chartData = episodes.slice(0, 8).map((episode) => ({
+
+  // Calculate scene stats from episodes
+  const allScenes = episodes.flatMap((ep) => ep.scenes || []);
+  const totalScenes = allScenes.length;
+  const approvedScenes = allScenes.filter((s) => s.approval_status === "approved").length;
+  const pendingScenes = allScenes.filter((s) => s.approval_status === "pending").length;
+  const rejectedScenes = allScenes.filter((s) => s.approval_status === "rejected").length;
+  const completedScenes = allScenes.filter((s) => s.status === "completed").length;
+  const generatingScenes = allScenes.filter((s) => s.status === "generating" || s.status === "pending").length;
+
+  // Chart shows episode generation status
+  const episodeStatusData = episodes.slice(0, 8).map((episode) => ({
     ep: `E${String(episode.episode_number).padStart(2, "0")}`,
-    status: episode.status === "completed" ? "done" : "pending",
-    // Note: Analytics data would come from a dedicated analytics endpoint
-    views: episode.assembled_video_url ? null : null, // Placeholder for real analytics
+    scenes: episode.scenes?.length || 0,
+    status: episode.status,
   }));
+
+  // Chart shows scene approval breakdown
+  const sceneApprovalData = [
+    { name: "Approved", value: approvedScenes, fill: "#10b981" },
+    { name: "Pending", value: pendingScenes, fill: "#f59e0b" },
+    { name: "Rejected", value: rejectedScenes, fill: "#ef4444" },
+  ].filter((d) => d.value > 0);
+
   const latestRuns = [...runs]
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
     .slice(0, 5);
@@ -76,10 +97,12 @@ export default function Dashboard() {
     .slice(0, 4);
 
   const stats = [
-    { label: "Stories", value: stories.length },
-    { label: "Episodes completed", value: completedEpisodes.length },
-    { label: "Active runs", value: activeRuns.length },
-    { label: "Connected channels", value: connectedAccounts.length },
+    { label: "Stories", value: stories.length, icon: Workflow, color: "text-violet-600" },
+    { label: "Episodes", value: episodes.length, icon: Video, color: "text-blue-600" },
+    { label: "Scenes total", value: totalScenes, icon: ImageIcon, color: "text-emerald-600" },
+    { label: "Completed", value: completedScenes, icon: CheckCircle, color: "text-green-600" },
+    { label: "Generating", value: generatingScenes, icon: Clock, color: "text-amber-600" },
+    { label: "Runs success", value: `${successfulRuns}/${runs.length}`, icon: TrendingUp, color: "text-teal-600" },
   ];
 
   // Refresh stories after creating a new one
@@ -146,13 +169,74 @@ export default function Dashboard() {
         </div>
 
         {/* Stats */}
-        <div className="grid gap-px overflow-hidden rounded-lg border border-mist sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 overflow-hidden sm:grid-cols-2 lg:grid-cols-6">
           {stats.map((s) => (
-            <div key={s.label} className="bg-paper p-6">
-              <p className="text-[11px] text-steel">{s.label}</p>
-              <p className="font-display mt-2 text-[26px] font-medium text-ink">{s.value}</p>
+            <div key={s.label} className="rounded-lg border border-fog bg-paper p-4">
+              <div className="flex items-center gap-2">
+                <s.icon className={`h-4 w-4 ${s.color}`} />
+                <p className="text-[11px] text-steel">{s.label}</p>
+              </div>
+              <p className="font-display mt-2 text-[22px] font-medium text-ink">{s.value}</p>
             </div>
           ))}
+        </div>
+
+        {/* Scene Approval Status + Episode Scene Counts */}
+        <div className="mt-8 grid gap-6 lg:grid-cols-3">
+          <div className="rounded-lg border border-fog p-6">
+            <div className="mb-6 flex items-center justify-between">
+              <div>
+                <p className="text-[11px] text-steel">Scene approval</p>
+                <h3 className="text-[16px] font-medium text-ink">Review status</h3>
+              </div>
+              <CheckCircle className="h-4 w-4 text-steel" />
+            </div>
+            {totalScenes === 0 ? (
+              <p className="text-[13px] text-steel">No scenes generated yet.</p>
+            ) : (
+              <>
+                <div className="flex items-end justify-between">
+                  <div>
+                    <p className="font-display text-[32px] font-medium text-ink">{approvedScenes}/{totalScenes}</p>
+                    <p className="text-[12px] text-steel">approved</p>
+                  </div>
+                  <p className="text-[12px] text-steel">{Math.round(approvedScenes/totalScenes*100)}% approval rate</p>
+                </div>
+                <ResponsiveContainer width="100%" height={120} className="mt-4">
+                  <BarChart data={sceneApprovalData} layout="vertical">
+                    <Tooltip contentStyle={{ borderRadius: 8, border: "1px solid #dbdfe5", fontSize: 13 }} />
+                    <Bar dataKey="value" radius={[0, 4, 4, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </>
+            )}
+          </div>
+
+          <div className="rounded-lg border border-fog p-6 lg:col-span-2">
+            <div className="mb-6 flex items-center justify-between">
+              <div>
+                <p className="text-[11px] text-steel">Scenes per episode</p>
+                <h3 className="text-[16px] font-medium text-ink">Episode breakdown</h3>
+              </div>
+              <Video className="h-4 w-4 text-steel" />
+            </div>
+            {episodes.length === 0 ? (
+              <p className="text-[13px] text-steel">No episodes created yet.</p>
+            ) : (
+              <ResponsiveContainer width="100%" height={140}>
+                <BarChart data={episodeStatusData}>
+                  <XAxis
+                    dataKey="ep"
+                    tick={{ fontSize: 11, fill: "#576579" }}
+                    axisLine={{ stroke: "#e7eaee" }}
+                    tickLine={false}
+                  />
+                  <Tooltip contentStyle={{ borderRadius: 8, border: "1px solid #dbdfe5", fontSize: 13 }} />
+                  <Bar dataKey="scenes" fill="#6366f1" radius={[4, 4, 0, 0]} name="Scenes" />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
         </div>
 
         {/* Analytics + pending */}
@@ -160,29 +244,25 @@ export default function Dashboard() {
           <div className="rounded-lg border border-fog p-6 lg:col-span-2">
             <div className="mb-6 flex items-center justify-between">
               <div>
-                <p className="text-[11px] text-steel">Episode completion signal</p>
-                <h3 className="text-[16px] font-medium text-ink">Assembly coverage</h3>
+                <p className="text-[11px] text-steel">Pipeline performance</p>
+                <h3 className="text-[16px] font-medium text-ink">Run history</h3>
               </div>
               <TrendingUp className="h-4 w-4 text-steel" />
             </div>
-            <ResponsiveContainer width="100%" height={220}>
-              <AreaChart data={chartData}>
-                <defs>
-                  <linearGradient id="views" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#1a73e8" stopOpacity={0.15} />
-                    <stop offset="100%" stopColor="#1a73e8" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <XAxis
-                  dataKey="ep"
-                  tick={{ fontSize: 11, fill: "#576579" }}
-                  axisLine={{ stroke: "#e7eaee" }}
-                  tickLine={false}
-                />
-                <Tooltip contentStyle={{ borderRadius: 8, border: "1px solid #dbdfe5", fontSize: 13 }} />
-                <Area type="monotone" dataKey="views" stroke="#1a73e8" strokeWidth={2} fill="url(#views)" />
-              </AreaChart>
-            </ResponsiveContainer>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div className="rounded-lg bg-emerald-50 p-4 text-center">
+                <p className="font-display text-[28px] font-medium text-emerald-600">{successfulRuns.length}</p>
+                <p className="text-[12px] text-emerald-700">Successful runs</p>
+              </div>
+              <div className="rounded-lg bg-amber-50 p-4 text-center">
+                <p className="font-display text-[28px] font-medium text-amber-600">{activeRuns.length}</p>
+                <p className="text-[12px] text-amber-700">Running/Pending</p>
+              </div>
+              <div className="rounded-lg bg-red-50 p-4 text-center">
+                <p className="font-display text-[28px] font-medium text-red-600">{failedRuns.length}</p>
+                <p className="text-[12px] text-red-700">Failed runs</p>
+              </div>
+            </div>
           </div>
 
           <div className="rounded-lg border border-fog p-6">

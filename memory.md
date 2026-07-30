@@ -1,3 +1,30 @@
+# Deployment Status (2026-07-28)
+
+## Infrastructure
+- ECS Instance: `i-t4n8gt40krtdeqh894ke`
+- Region: ap-southeast-1 (Singapore)
+- Public IP: 8.222.176.62
+- Work URLs: 
+  - https://work-1-knghwnsaumfvkfyg.prod-runtime.all-hands.dev/ (port 12000)
+  - https://work-2-knghwnsaumfvkfyg.prod-runtime.all-hands.dev/ (port 12001)
+
+## Deployment Status
+- ✅ Backend running on port 8080
+- ✅ Frontend accessible via public IP (http://8.222.176.62/)
+- ✅ Health endpoints working (/health, /api/health)
+- ❌ Work URLs showing Bad Gateway (OpenHands Cloud Runtime issue)
+
+## Key Files
+- Deployment: `/root/project/`
+- Entry: `/root/project/artifacts/pipeline/src/alibaba_entry.py`
+- Venv: `/root/storyforge-venv/`
+- Static files: `/root/project/public/`
+
+## Notes
+The app is functional on the public IP. The work-1/work-2 URLs are managed by OpenHands Cloud Runtime and need further investigation.
+
+---
+
 # StoryForge Platform Analysis
 
 ## Executive Summary
@@ -178,20 +205,24 @@ pipeline_config: {
 3. ✅ **Generate Button** - Add "Start Generation" with status
 4. ✅ **Checkpoint UI** - Basic checkpoint listing and approval
 
-### Phase 2: Character Enhancement
-5. Character Refs Upload - Add upload to CharacterSheet
-6. Character-Regeneration - Add regenerate refs button
-7. Character Assignment - Add to scene editing
+### Phase 2: Character Enhancement ✅ COMPLETED
+5. ✅ **Character Refs Upload** - Add upload to CharacterSheet with gallery
+6. ✅ **Character-Regeneration** - Add regenerate refs button
+7. ✅ **Character Assignment** - Add to scene editing
 
-### Phase 3: Production Polish
-8. Episode Management - Titles, summaries, new episodes
-9. Narration Audio - Voice selection, preview
-10. Publishing - Publish preview and history
+### Phase 3: Production Polish ✅ COMPLETED
+8. ✅ **Episode Management** - Episode titles, summaries, assembled video preview
+9. ✅ **Narration Audio** - Voice selection per scene with preview
+10. ✅ **Publishing** - PublishSheet component for publish targets and history
 
-### Phase 4: Advanced Features
-11. Gallery View - Browse completed work
-12. Pipeline Config UI - Advanced settings panel
-13. Bible Management - Brand/character/world bibles
+### Phase 4: Advanced Features ✅ COMPLETED
+11. ✅ **Gallery View** - GalleryPage.jsx with grid/list views, filtering, lightbox preview
+12. ✅ **Pipeline Config UI** - PipelineConfigDialog with media/approval/provider/continuity settings
+13. ✅ **Bible Management** - BibleSheet component for brand/character/world/style bibles
+14. ✅ **Routing & Integration** - Added Gallery route to App.jsx and navigation sidebar
+
+### Phase 5: Testing (Requires External Backend)
+15. ⚠️ Backend testing requires CockroachDB and Redis connections
 
 ---
 
@@ -200,14 +231,23 @@ pipeline_config: {
 ### Frontend
 - `/web/src/pages/Editor.jsx` - Main editor page
 - `/web/src/pages/Dashboard.jsx` - Dashboard page
+- `/web/src/pages/Gallery.jsx` - Gallery view (NEW)
 - `/web/src/components/dysentry/CreateStoryModal.jsx` - Story creation modal
 - `/web/src/components/dysentry/editor/SceneStage.jsx` - Scene editing panel
-- `/web/src/components/dysentry/editor/CharacterSheet.jsx` - Character management
+- `/web/src/components/dysentry/editor/CharacterSheet.jsx` - Character management (with ref upload)
+- `/web/src/components/dysentry/editor/CheckpointReviewSheet.jsx` - Checkpoint review
+- `/web/src/components/dysentry/editor/PublishSheet.jsx` - Publishing UI
+- `/web/src/components/dysentry/editor/BibleSheet.jsx` - Bible management (NEW)
+- `/web/src/components/dysentry/editor/PipelineConfigDialog.jsx` - Pipeline settings (NEW)
+- `/web/src/components/dysentry/AppChrome.jsx` - Navigation sidebar
 - `/web/src/api/dysentryClient.js` - API client functions
+- `/web/src/App.jsx` - Routes configuration
 
 ### Backend
 - `/artifacts/pipeline/src/routes/stories.py` - Story API routes
 - `/artifacts/pipeline/src/routes/checkpoints.py` - Checkpoint API routes
+- `/artifacts/pipeline/src/routes/gallery.py` - Gallery API
+- `/artifacts/pipeline/src/routes/bibles.py` - Bibles API
 - `/artifacts/pipeline/src/routes/characters.py` - Character API routes
 - `/artifacts/pipeline/src/models/story.py` - Pydantic models
 

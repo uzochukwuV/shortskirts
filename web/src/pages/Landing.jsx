@@ -4,6 +4,7 @@ import { ArrowRight, Check } from "lucide-react";
 import SiteChrome from "@/components/dysentry/SiteChrome";
 import Button from "@/components/dysentry/Button";
 import { Image } from "@/components/ui/image";
+import { useAuth } from "@/lib/AuthContext";
 
 const tabs = ["Overview", "Characters", "Pipeline", "Publishing", "Analytics"];
 
@@ -46,6 +47,7 @@ const analyticsPoints = [
 
 export default function Landing() {
   const [activeTab, setActiveTab] = useState("Overview");
+  const { isAuthenticated } = useAuth();
 
   return (
     <SiteChrome>
@@ -64,14 +66,24 @@ export default function Landing() {
           checkpoints, and automated publishing — all tracked with per-episode analytics.
         </p>
         <div className="mt-8 flex items-center gap-3">
-          <Link to="/register">
-            <Button>
-              Start creating <ArrowRight className="h-4 w-4" />
-            </Button>
-          </Link>
-          <Link to="/dashboard">
-            <Button variant="secondary">View studio</Button>
-          </Link>
+          {isAuthenticated ? (
+            <Link to="/dashboard">
+              <Button>
+                Go to Dashboard <ArrowRight className="h-4 w-4" />
+              </Button>
+            </Link>
+          ) : (
+            <>
+              <Link to="/register">
+                <Button>
+                  Start creating <ArrowRight className="h-4 w-4" />
+                </Button>
+              </Link>
+              <Link to="/dashboard">
+                <Button variant="secondary">View studio</Button>
+              </Link>
+            </>
+          )}
         </div>
         {/* Tab nav */}
         <div className="mt-16 flex items-center gap-8 overflow-x-auto border-b border-mist">
@@ -163,16 +175,24 @@ export default function Landing() {
       <section className="mx-auto max-w-[1280px] px-6 py-20">
         <div className="rounded-lg border border-fog px-8 py-16 text-center">
           <h2 className="font-display text-[40px] font-medium text-ink" style={{ lineHeight: 1.12 }}>
-            Start your first series today.
+            {isAuthenticated ? "Ready to create your next episode?" : "Start your first series today."}
           </h2>
           <p className="mx-auto mt-4 max-w-md text-[16px] text-steel" style={{ lineHeight: 1.5 }}>
-            Free to start. No credit card required.
+            {isAuthenticated ? "Head to your dashboard to manage your stories and episodes." : "Free to start. No credit card required."}
           </p>
-          <Link to="/register" className="mt-8 inline-block">
-            <Button>
-              Start creating <ArrowRight className="h-4 w-4" />
-            </Button>
-          </Link>
+          {isAuthenticated ? (
+            <Link to="/dashboard" className="mt-8 inline-block">
+              <Button>
+                Go to Dashboard <ArrowRight className="h-4 w-4" />
+              </Button>
+            </Link>
+          ) : (
+            <Link to="/register" className="mt-8 inline-block">
+              <Button>
+                Start creating <ArrowRight className="h-4 w-4" />
+              </Button>
+            </Link>
+          )}
         </div>
       </section>
     </SiteChrome>

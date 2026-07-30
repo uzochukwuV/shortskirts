@@ -1,7 +1,8 @@
 import React from "react";
 import { Link } from "react-router-dom";
-import { Search, ArrowRight } from "lucide-react";
+import { Search, ArrowRight, User, LogOut } from "lucide-react";
 import Button from "./Button";
+import { useAuth } from "@/lib/AuthContext";
 
 const navLinks = ["Features", "Pipeline", "Analytics", "Pricing"];
 
@@ -13,6 +14,8 @@ const footerCols = [
 ];
 
 export default function SiteChrome({ children }) {
+  const { isAuthenticated, user, logout } = useAuth();
+
   return (
     <div className="min-h-screen bg-paper">
       {/* Announcement bar */}
@@ -44,14 +47,37 @@ export default function SiteChrome({ children }) {
                 className="w-28 bg-transparent text-[14px] text-ink outline-none placeholder-steel"
               />
             </div>
-            <Link to="/login" className="hidden text-[16px] text-ink transition-colors hover:text-steel sm:inline">
-              Sign in
-            </Link>
-            <Link to="/register">
-              <Button className="px-5 py-2.5 text-[14px]">
-                Start creating <ArrowRight className="h-4 w-4" />
-              </Button>
-            </Link>
+            {isAuthenticated ? (
+              <>
+                <Link to="/dashboard" className="hidden items-center gap-2 text-[16px] text-ink transition-colors hover:text-steel sm:inline">
+                  <User className="h-4 w-4" />
+                  {user?.email?.split('@')[0] || 'Dashboard'}
+                </Link>
+                <button
+                  onClick={() => logout()}
+                  className="hidden items-center gap-2 rounded-lg border border-mist px-3 py-2 text-[14px] text-ink transition-colors hover:border-ink hover:bg-muted sm:flex"
+                >
+                  <LogOut className="h-4 w-4" />
+                  Sign out
+                </button>
+                <Link to="/dashboard">
+                  <Button className="px-5 py-2.5 text-[14px]">
+                    Dashboard <ArrowRight className="h-4 w-4" />
+                  </Button>
+                </Link>
+              </>
+            ) : (
+              <>
+                <Link to="/login" className="hidden text-[16px] text-ink transition-colors hover:text-steel sm:inline">
+                  Sign in
+                </Link>
+                <Link to="/register">
+                  <Button className="px-5 py-2.5 text-[14px]">
+                    Start creating <ArrowRight className="h-4 w-4" />
+                  </Button>
+                </Link>
+              </>
+            )}
           </div>
         </nav>
       </header>
