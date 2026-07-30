@@ -6,17 +6,6 @@ A custom GenBlaze provider adapter for Alibaba DashScope API (Qwen/Wan video and
 This provider enables GenBlaze Pipeline API integration with:
 - Video: wan2.7-i2v, wan2.7-t2v, wan2.7-r2v, happyhorse models
 - Image: qwen-image, wanx2.1-t2i-turbo, wan2.7-image-pro
-
-Usage:
-    from pipeline.providers.dashscope import DashScopeVideoProvider, DashScopeImageProvider
-    
-    # Video generation
-    provider = DashScopeVideoProvider()
-    result = (
-        Pipeline("my-video")
-        .step(provider, model="wan2.7-t2v", prompt="A cat playing piano", modality=Modality.VIDEO)
-        .run(timeout=600)
-    )
 """
 
 from __future__ import annotations
@@ -44,12 +33,15 @@ from genblaze_core.providers import (
 from genblaze_core.providers.base import BaseProvider
 
 
-# Default DashScope API base URL
 DEFAULT_BASE_URL = "https://dashscope-intl.aliyuncs.com/api/v1"
+
+# Default models (matching existing Dysentry configuration)
+DASHSCOPE_HAPPYHORSE_T2V_MODEL = "happyhorse-1.1-t2v"
+DASHSCOPE_HAPPYHORSE_I2V_MODEL = "happyhorse-1.1-i2v"
+DASHSCOPE_HAPPYHORSE_R2V_MODEL = "happyhorse-1.1-r2v"
 
 
 def _classify_capability(model: str, reference_images: list | None = None) -> str:
-    """Determine the DashScope capability based on model and inputs."""
     if not reference_images:
         return "t2v"
     if len(reference_images) >= 2:
@@ -58,7 +50,6 @@ def _classify_capability(model: str, reference_images: list | None = None) -> st
 
 
 def _map_dashscope_error(status_code: int, response_text: str) -> ProviderErrorCode:
-    """Map DashScope HTTP errors to GenBlaze error codes."""
     if status_code == 401 or status_code == 403:
         return ProviderErrorCode.AUTH_FAILURE
     if status_code == 429:
@@ -69,12 +60,6 @@ def _map_dashscope_error(status_code: int, response_text: str) -> ProviderErrorC
 
 
 class DashScopeBase(BaseProvider):
-    """Base class for DashScope/Qwen providers.
-    
-    Handles authentication, HTTP client, and common request handling
-    for DashScope API.
-    """
-    
     discovery_support = DiscoverySupport.NONE
 
     def __init__(
@@ -84,12 +69,9 @@ class DashScopeBase(BaseProvider):
         http_timeout: float = 120.0,
         models: ModelRegistry | None = None,
         retry_policy: RetryPolicy | None = None,
-        poll_interval: float = 5.0,
+        poll_interval: float = 10.0,
     ):
-        super().__init__(
-            models=models,
-            retry_policy=retry_policy,
-        )
+        super().__init__(models=models, retry_policy=retry_policy)
         self._api_key = api_key or os.environ.get("DASHSCOPE_API_KEY")
         self._base_url = base_url or os.environ.get("DASHSCOPE_BASE_URL") or DEFAULT_BASE_URL
         self._http_timeout = http_timeout
@@ -98,7 +80,6 @@ class DashScopeBase(BaseProvider):
         self.poll_transient_retries = 10
 
     def _get_http_client(self) -> httpx.Client:
-        """Get or create HTTP client with auth."""
         if self._http_client is None:
             if not self._api_key:
                 raise ProviderError(
@@ -116,62 +97,172 @@ class DashScopeBase(BaseProvider):
         return self._http_client
 
     def close(self) -> None:
-        """Close HTTP client."""
         if self._http_client is not None:
             self._http_client.close()
             self._http_client = None
 
-    def _submit_video_request(self, model: str, payload: dict) -> str:
-        """Submit a video generation request and return task_id."""
-        client = self._get_http_client()
+
+class DashScopeVideoProvider(DashScopeBase):
+    """GenBlaze provider for DashScope/Qwen video generation."""
+    
+    name = "dashscope-video"
+
+    @classmethod
+    def create_registry(cls) -> ModelRegistry:
+        wan_family = ModelFamily(
+            name="dashscope-wan",
+            pattern=re.compile(r"^wan\d+\.\d+-(?:t2v|i2v|r2v)$"),
+            spec_template=ModelSpec(
+                model_id="*",
+                modality=Modality.VIDEO,
+                input_mapping=route_images(slots=("image_url",)),
+            ),
+            description="Alibaba Wan video family",
+            example_slugs=("wan2.7-t2v", "wan2.7-i2v", "wan2.7-r2v"),
+        )
+        
+        happyhorse_family = ModelFamily(
+            name="dashscope-happyhorse",
+            pattern=re.compile(r"^happyhorse-\d+\.\d+-(?:t2v|i2v|r2v)$"),
+            spec_template=ModelSpec(
+                model_id="*",
+                modality=Modality.VIDEO,
+                input_mapping=route_images(slots=("image_url",)),
+            ),
+            description="HappyHorse video family",
+            example_slugs=("happyhorse-1.1-t2v", "happyhorse-1.1-i2v", "happyhorse-1.1-r2v"),
+        )
+        
+        return ModelRegistry(provider_families=(wan_family, happyhorse_family))
+
+    def get_capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            supported_modalities=[Modality.VIDEO],
+            supported_inputs=["text", "image"],
+            accepts_chain_input=True,
+            output_formats=["video/mp4"],
+        )
+
+    def submit(self, step: Step, config: RunnableConfig | None = None) -> Any:
+        """Submit video generation request with async header."""
+        try:
+            endpoint, payload = self._build_video_payload(step)
+            
+            headers = {
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+                "X-DashScope-Async": "enable",  # Enable async mode
+            }
+            
+            client = self._get_http_client()
+            resp = client.post(endpoint, headers=headers, json=payload)
+            
+            if resp.status_code >= 400:
+                error_text = resp.text[:500]
+                raise ProviderError(
+                    f"DashScope video submit failed ({resp.status_code}): {error_text}",
+                    error_code=_map_dashscope_error(resp.status_code, resp.text),
+                )
+            
+            data = resp.json()
+            task_id = data.get("output", {}).get("task_id")
+            if not task_id:
+                raise ProviderError(f"DashScope submit succeeded but no task_id: {data}")
+            
+            print(f"[dashscope] Video task submitted: {task_id}")
+            return task_id
+            
+        except ProviderError:
+            raise
+        except Exception as exc:
+            raise ProviderError(
+                f"DashScope video submit failed: {exc}",
+                error_code=ProviderErrorCode.UNKNOWN,
+            ) from exc
+
+    def _build_video_payload(self, step: Step) -> tuple[str, dict]:
+        """Build DashScope video payload. Returns (endpoint, payload)."""
+        model = step.model
+        prompt = step.prompt or ""
+        images = step.inputs or []
+        capability = _classify_capability(model, images)
+        
         endpoint = "/services/aigc/video-generation/video-synthesis"
         
-        resp = client.post(endpoint, json=payload)
-        if resp.status_code >= 400:
-            error_text = resp.text[:500]
-            raise ProviderError(
-                f"DashScope video submit failed ({resp.status_code}): {error_text}",
-                error_code=_map_dashscope_error(resp.status_code, resp.text),
-            )
+        # Select model based on capability
+        if capability == "t2v":
+            model = model or DASHSCOPE_HAPPYHORSE_T2V_MODEL
+        elif capability == "i2v":
+            model = model or DASHSCOPE_HAPPYHORSE_I2V_MODEL
+        elif capability == "r2v":
+            model = model or DASHSCOPE_HAPPYHORSE_R2V_MODEL
         
-        data = resp.json()
-        output = data.get("output", {})
-        task_id = output.get("task_id")
-        if not task_id:
-            raise ProviderError(f"DashScope submit succeeded but no task_id: {data}")
+        resolution = step.params.get("resolution", "1080P")
+        ratio = step.params.get("ratio", "16:9")
+        duration = step.params.get("duration", 5)
         
-        return task_id
+        if capability == "r2v" and images:
+            payload = {
+                "model": model,
+                "input": {
+                    "prompt": prompt,
+                    "media": [{"type": "reference_image", "url": url} for url in images[:9]],
+                },
+                "parameters": {
+                    "resolution": resolution,
+                    "ratio": ratio,
+                    "duration": duration,
+                    "watermark": False,
+                },
+            }
+        elif capability == "i2v" and images:
+            payload = {
+                "model": model,
+                "input": {
+                    "prompt": prompt,
+                    "media": [{"type": "first_frame", "url": images[0]}],
+                },
+                "parameters": {
+                    "resolution": resolution,
+                    "ratio": ratio,
+                    "duration": duration,
+                    "watermark": False,
+                },
+            }
+        else:
+            payload = {
+                "model": model,
+                "input": {"prompt": prompt},
+                "parameters": {
+                    "resolution": resolution,
+                    "ratio": ratio,
+                    "duration": duration,
+                    "prompt_extend": True,
+                    "watermark": False,
+                },
+            }
+        
+        return endpoint, payload
 
-    def _submit_image_request(self, model: str, payload: dict) -> str:
-        """Submit an image generation request and return task_id."""
-        client = self._get_http_client()
-        endpoint = "/services/aigc/multimodal-generation/generation"
-        
-        resp = client.post(endpoint, json=payload)
-        if resp.status_code >= 400:
-            error_text = resp.text[:500]
-            raise ProviderError(
-                f"DashScope image submit failed ({resp.status_code}): {error_text}",
-                error_code=_map_dashscope_error(resp.status_code, resp.text),
-            )
-        
-        data = resp.json()
-        output = data.get("output", {})
-        task_id = output.get("task_id")
-        if not task_id:
-            raise ProviderError(f"DashScope submit succeeded but no task_id: {data}")
-        
-        return task_id
+    def poll(self, prediction_id: Any, config: RunnableConfig | None = None) -> bool:
+        """Poll video task status."""
+        try:
+            status = self._poll_status(prediction_id)
+            return status in ("SUCCEEDED", "SUCCESS")
+        except ProviderError:
+            raise
+        except Exception as exc:
+            raise ProviderError(f"DashScope video poll failed: {exc}", error_code=ProviderErrorCode.UNKNOWN)
 
-    def _poll_video_status(self, task_id: str, timeout: int = 600) -> dict:
-        """Poll video task status until completion."""
+    def _poll_status(self, task_id: str, timeout: int = 600) -> str:
+        """Poll task status using /tasks/{task_id} endpoint."""
         client = self._get_http_client()
-        endpoint = "/services/aigc/video-generation/video-synthesis"
+        endpoint = f"/tasks/{task_id}"
         deadline = time.time() + timeout
         
         while time.time() < deadline:
             try:
-                resp = client.get(endpoint, params={"task_id": task_id})
+                resp = client.get(endpoint)
                 if resp.status_code >= 400:
                     raise ProviderError(
                         f"DashScope poll failed ({resp.status_code}): {resp.text[:200]}",
@@ -179,17 +270,15 @@ class DashScopeBase(BaseProvider):
                     )
                 
                 data = resp.json()
-                output = data.get("output", {})
-                status = output.get("task_status", "").upper()
+                status = data.get("output", {}).get("task_status", "").upper()
+                
+                print(f"[dashscope] Task {task_id}: {status}")
                 
                 if status in ("SUCCEEDED", "SUCCESS"):
-                    return output
+                    return status
                 elif status in ("FAILED", "CANCELLED", "CANCELED"):
-                    error_msg = output.get("message") or output.get("error") or status
-                    raise ProviderError(
-                        f"DashScope video task {status}: {error_msg}",
-                        error_code=ProviderErrorCode.UNKNOWN,
-                    )
+                    error_msg = data.get("output", {}).get("message") or status
+                    raise ProviderError(f"DashScope video task {status}: {error_msg}")
                 
                 time.sleep(self._poll_interval)
                 
@@ -203,165 +292,38 @@ class DashScopeBase(BaseProvider):
             error_code=ProviderErrorCode.TIMEOUT,
         )
 
-    def _poll_image_status(self, task_id: str, timeout: int = 120) -> dict:
-        """Poll image task status until completion."""
-        client = self._get_http_client()
-        endpoint = "/services/aigc/multimodal-generation/generation"
-        deadline = time.time() + timeout
-        
-        while time.time() < deadline:
-            try:
-                resp = client.get(endpoint, params={"task_id": task_id})
-                if resp.status_code >= 400:
-                    raise ProviderError(
-                        f"DashScope poll failed ({resp.status_code}): {resp.text[:200]}",
-                        error_code=_map_dashscope_error(resp.status_code, resp.text),
-                    )
-                
-                data = resp.json()
-                output = data.get("output", {})
-                status = output.get("task_status", "").upper()
-                
-                if status in ("SUCCEEDED", "SUCCESS"):
-                    return output
-                elif status in ("FAILED", "CANCELLED", "CANCELED"):
-                    error_msg = output.get("message") or output.get("error") or status
-                    raise ProviderError(
-                        f"DashScope image task {status}: {error_msg}",
-                        error_code=ProviderErrorCode.UNKNOWN,
-                    )
-                
-                time.sleep(5)
-                
-            except ProviderError:
-                raise
-            except Exception:
-                time.sleep(5)
-        
-        raise ProviderError(
-            f"DashScope image task {task_id} timed out after {timeout}s",
-            error_code=ProviderErrorCode.TIMEOUT,
-        )
-
-
-class DashScopeVideoProvider(DashScopeBase):
-    """GenBlaze provider for DashScope/Qwen video generation.
-    
-    Supports:
-    - Text-to-Video (t2v): wan2.7-t2v, happyhorse-1.1-t2v
-    - Image-to-Video (i2v): wan2.7-i2v, happyhorse-1.1-i2v
-    - Reference-to-Video (r2v): wan2.7-r2v, happyhorse-1.1-r2v
-    
-    Args:
-        api_key: DashScope API key. Falls back to DASHSCOPE_API_KEY env var.
-        base_url: DashScope API base URL. Defaults to https://dashscope-intl.aliyuncs.com/api/v1
-        http_timeout: HTTP request timeout in seconds (default 120).
-        models: Optional custom ModelRegistry.
-    """
-    
-    name = "dashscope-video"
-
-    @classmethod
-    def create_registry(cls) -> ModelRegistry:
-        """Create the DashScope video model registry."""
-        
-        # Wan family
-        wan_family = ModelFamily(
-            name="dashscope-wan",
-            pattern=re.compile(r"^wan\d+\.\d+-(?:t2v|i2v|r2v)$"),
-            spec_template=ModelSpec(
-                model_id="*",
-                modality=Modality.VIDEO,
-                input_mapping=route_images(slots=("image_url",)),
-            ),
-            description="Alibaba Wan video family",
-            example_slugs=("wan2.7-t2v", "wan2.7-i2v", "wan2.7-r2v"),
-        )
-        
-        # HappyHorse family
-        happyhorse_family = ModelFamily(
-            name="dashscope-happyhorse",
-            pattern=re.compile(r"^happyhorse-\d+\.\d+-(?:t2v|i2v|r2v)$"),
-            spec_template=ModelSpec(
-                model_id="*",
-                modality=Modality.VIDEO,
-                input_mapping=route_images(slots=("image_url",)),
-            ),
-            description="HappyHorse video family",
-            example_slugs=("happyhorse-1.1-t2v", "happyhorse-1.1-i2v", "happyhorse-1.1-r2v"),
-        )
-        
-        return ModelRegistry(
-            provider_families=(wan_family, happyhorse_family),
-        )
-
-    def get_capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(
-            supported_modalities=[Modality.VIDEO],
-            supported_inputs=["text", "image"],
-            accepts_chain_input=True,
-            output_formats=["video/mp4"],
-        )
-
-    def submit(self, step: Step, config: RunnableConfig | None = None) -> Any:
-        """Submit video generation request."""
-        try:
-            payload = self._build_video_payload(step)
-            task_id = self._submit_video_request(step.model, payload)
-            return task_id
-        except ProviderError:
-            raise
-        except Exception as exc:
-            raise ProviderError(
-                f"DashScope video submit failed: {exc}",
-                error_code=ProviderErrorCode.UNKNOWN,
-            ) from exc
-
-    def _build_video_payload(self, step: Step) -> dict:
-        """Build DashScope video payload from step."""
-        model = step.model
-        prompt = step.prompt or ""
-        images = step.inputs or []
-        capability = _classify_capability(model, images)
-        
-        payload: dict = {
-            "model": model,
-            "input": {"prompt": prompt},
-            "parameters": {
-                "duration": step.params.get("duration", 5),
-                "resolution": step.params.get("resolution", "720p"),
-            }
-        }
-        
-        if capability in ("i2v", "r2v") and images:
-            if capability == "r2v" and len(images) >= 2:
-                payload["input"]["images"] = images[:2]
-            else:
-                payload["input"]["images"] = images[:1]
-        
-        return payload
-
-    def poll(self, prediction_id: Any, config: RunnableConfig | None = None) -> bool:
-        """Poll video task status."""
-        try:
-            output = self._poll_video_status(prediction_id)
-            status = output.get("task_status", "").upper()
-            return status in ("SUCCEEDED", "SUCCESS")
-        except ProviderError:
-            raise
-        except Exception as exc:
-            raise ProviderError(f"DashScope video poll failed: {exc}", error_code=ProviderErrorCode.UNKNOWN)
-
     def fetch_output(self, prediction_id: Any, step: Step) -> Step:
         """Fetch video generation result."""
         try:
-            output = self._poll_video_status(prediction_id)
+            client = self._get_http_client()
+            resp = client.get(f"/tasks/{prediction_id}")
             
+            if resp.status_code >= 400:
+                raise ProviderError(
+                    f"DashScope fetch failed ({resp.status_code}): {resp.text[:200]}",
+                    error_code=_map_dashscope_error(resp.status_code, resp.text),
+                )
+            
+            data = resp.json()
+            output = data.get("output", {})
+            status = output.get("task_status", "").upper()
+            
+            if status in ("FAILED", "CANCELLED", "CANCELED"):
+                raise ProviderError(f"DashScope video task {status}")
+            if status != "SUCCEEDED":
+                raise ProviderError(f"DashScope video task not complete: {status}")
+            
+            # Extract video URL
             video_url = (
-                output.get("video_url") 
+                output.get("video_url")
                 or output.get("video", {}).get("url")
-                or (output.get("results", [{}])[0].get("url") if output.get("results") else None)
+                or output.get("url")
             )
+            
+            if not video_url:
+                results = output.get("results", [])
+                if results and isinstance(results, list):
+                    video_url = results[0].get("video_url") or results[0].get("url")
             
             if not video_url:
                 raise ProviderError(f"DashScope video task succeeded but no video_url: {output}")
@@ -381,23 +343,12 @@ class DashScopeVideoProvider(DashScopeBase):
 
 
 class DashScopeImageProvider(DashScopeBase):
-    """GenBlaze provider for DashScope/Qwen image generation.
-    
-    Supports: qwen-image-plus, wanx2.1-t2i-turbo, wan2.7-image-pro, etc.
-    
-    Args:
-        api_key: DashScope API key. Falls back to DASHSCOPE_API_KEY env var.
-        base_url: DashScope API base URL.
-        http_timeout: HTTP request timeout in seconds (default 120).
-        models: Optional custom ModelRegistry.
-    """
+    """GenBlaze provider for DashScope/Qwen image generation."""
     
     name = "dashscope-image"
 
     @classmethod
     def create_registry(cls) -> ModelRegistry:
-        """Create the DashScope image model registry."""
-        
         image_family = ModelFamily(
             name="dashscope-image",
             pattern=re.compile(r"^(?:qwen|wanx|wan\d*\.?\d*)-(?:image|t2i|edit)(?:-\S+)?$"),
@@ -421,18 +372,44 @@ class DashScopeImageProvider(DashScopeBase):
         )
 
     def submit(self, step: Step, config: RunnableConfig | None = None) -> Any:
-        """Submit image generation request."""
+        """Submit image generation request.
+        
+        Images are synchronous - we submit and get result immediately.
+        Returns a dict with the result for fetch_output to process.
+        """
         try:
             payload = self._build_image_payload(step)
-            task_id = self._submit_image_request(step.model, payload)
-            return task_id
+            
+            headers = {
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            }
+            
+            client = self._get_http_client()
+            endpoint = "/services/aigc/multimodal-generation/generation"
+            resp = client.post(endpoint, headers=headers, json=payload)
+            
+            if resp.status_code >= 400:
+                error_text = resp.text[:500]
+                raise ProviderError(
+                    f"DashScope image submit failed ({resp.status_code}): {error_text}",
+                    error_code=_map_dashscope_error(resp.status_code, resp.text),
+                )
+            
+            data = resp.json()
+            
+            # For images, the result comes immediately
+            # Return the full response data for fetch_output to extract URL
+            print(f"[dashscope] Image generated successfully")
+            return data  # Return full response for sync images
+            
         except ProviderError:
             raise
         except Exception as exc:
             raise ProviderError(f"DashScope image submit failed: {exc}", error_code=ProviderErrorCode.UNKNOWN)
 
     def _build_image_payload(self, step: Step) -> dict:
-        """Build DashScope image payload from step."""
+        """Build DashScope image payload."""
         model = step.model
         prompt = step.prompt or ""
         images = step.inputs or []
@@ -449,35 +426,56 @@ class DashScopeImageProvider(DashScopeBase):
         }
         
         if images and "edit" in model.lower():
-            payload["input"]["messages"][0]["content"] = [{"image": images[0]}, {"text": prompt}]
+            content = [{"image": img} for img in images] + [{"text": prompt}]
+            payload["input"]["messages"][0]["content"] = content
         
         return payload
 
     def poll(self, prediction_id: Any, config: RunnableConfig | None = None) -> bool:
-        """Poll image task status."""
-        try:
-            output = self._poll_image_status(prediction_id)
-            status = output.get("task_status", "").upper()
-            return status in ("SUCCEEDED", "SUCCESS")
-        except ProviderError:
-            raise
-        except Exception as exc:
-            raise ProviderError(f"DashScope image poll failed: {exc}", error_code=ProviderErrorCode.UNKNOWN)
+        """Poll image task status.
+        
+        For sync images, prediction_id is the full response data.
+        """
+        # Sync images return immediately - always done
+        return True
 
     def fetch_output(self, prediction_id: Any, step: Step) -> Step:
-        """Fetch image generation result."""
+        """Fetch image generation result.
+        
+        For sync images, prediction_id is the full response data.
+        """
         try:
-            output = self._poll_image_status(prediction_id)
+            # prediction_id is the full response for sync images
+            data = prediction_id if isinstance(prediction_id, dict) else {}
+            output = data.get("output", {})
             
-            image_url = (
-                output.get("image_url")
-                or output.get("url")
-                or (output.get("results", [{}])[0].get("url") if output.get("results") else None)
-                or output.get("output", {}).get("image_url")
-            )
+            # Extract image URL from choices (sync response format)
+            choices = output.get("choices", [])
+            image_url = None
+            
+            if choices and isinstance(choices, list):
+                message = choices[0].get("message", {})
+                content = message.get("content", [])
+                if content and isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and item.get("image"):
+                            image_url = item["image"]
+                            break
+            
+            # Fallback to other extraction methods
+            if not image_url:
+                image_url = (
+                    output.get("image_url")
+                    or output.get("url")
+                )
             
             if not image_url:
-                raise ProviderError(f"DashScope image task succeeded but no image_url: {output}")
+                results = output.get("results", [])
+                if results and isinstance(results, list):
+                    image_url = results[0].get("image_url") or results[0].get("url")
+            
+            if not image_url:
+                raise ProviderError(f"DashScope image succeeded but no image_url: {output}")
             
             media_type = "image/png"
             url_str = str(image_url).lower()
@@ -488,7 +486,7 @@ class DashScopeImageProvider(DashScopeBase):
             
             asset = Asset(url=str(image_url), media_type=media_type)
             step.assets.append(asset)
-            step.provider_payload = {"dashscope": {"task_id": prediction_id}}
+            step.provider_payload = {"dashscope": {"type": "sync_image"}}
             
             return step
             
