@@ -5,6 +5,7 @@ This module provides a unified interface to GenBlaze's Pipeline API for
 generating video, image, and audio content with built-in provenance tracking.
 
 Supported Providers:
+- DashScope/Qwen: wan2.7-t2v/i2v/r2v, happyhorse, qwen-image (via custom provider)
 - GMICloud: Seedance, Kling, Veo, Wan (video); Seedream, FLUX (image)
 - OpenAI: Sora (video), DALL-E (image), TTS (audio)
 - Google: Veo (video), Imagen (image)
@@ -17,7 +18,7 @@ Usage:
     result = await adapter.generate_video(
         prompt="A drone shot over mountains",
         reference_images=["https://..."],
-        model="Kling-Text2Video-V2.1-Master",
+        model="wan2.7-t2v",
     )
 """
 
@@ -35,11 +36,17 @@ from genblaze_s3 import S3StorageBackend
 
 class VideoModel(str, Enum):
     """Supported video generation models."""
+    # DashScope/Qwen (via custom provider)
+    WAN_T2V = "wan2.7-t2v"
+    WAN_I2V = "wan2.7-i2v"
+    WAN_R2V = "wan2.7-r2v"
+    HAPPYHORSE_T2V = "happyhorse-1.1-t2v"
+    HAPPYHORSE_I2V = "happyhorse-1.1-i2v"
+    HAPPYHORSE_R2V = "happyhorse-1.1-r2v"
     # GMICloud
     KLING_T2V = "Kling-Text2Video-V2.1-Master"
     KLING_I2V = "Kling-Image2Video-V2.1-Master"
     VEO3 = "veo3"
-    WAN_T2V = "wan2.6-t2v"
     # OpenAI
     SORA_2 = "sora-2"
     # NVIDIA
@@ -52,6 +59,10 @@ class VideoModel(str, Enum):
 
 class ImageModel(str, Enum):
     """Supported image generation models."""
+    # DashScope/Qwen (via custom provider)
+    QWEN_IMAGE_PLUS = "qwen-image-plus"
+    WANX_T2I = "wanx2.1-t2i-turbo"
+    QWEN_EDIT = "qwen-image-edit-plus"
     # GMICloud
     SEEDREAM = "seedream-5.0-lite"
     SEEDANCE = "seedance-2.0"
@@ -133,7 +144,7 @@ class GenBlazeAdapter:
         self,
         prompt: str,
         reference_images: Optional[list[str]] = None,
-        model: str = VideoModel.KLING_T2V.value,
+        model: str = VideoModel.WAN_T2V.value,
         duration: int = 5,
         aspect_ratio: str = "16:9",
         timeout: int = 600,
@@ -144,7 +155,7 @@ class GenBlazeAdapter:
         Args:
             prompt: Text prompt for video generation
             reference_images: Optional list of reference image URLs
-            model: Video model to use (defaults to Kling T2V)
+            model: Video model to use (defaults to wan2.7-t2v via DashScope)
             duration: Video duration in seconds
             aspect_ratio: Video aspect ratio (e.g., "16:9", "9:16")
             timeout: Maximum wait time in seconds
@@ -214,7 +225,7 @@ class GenBlazeAdapter:
     async def generate_image(
         self,
         prompt: str,
-        model: str = ImageModel.SEEDREAM.value,
+        model: str = ImageModel.QWEN_IMAGE_PLUS.value,
         size: str = "1024x1024",
         timeout: int = 120,
     ) -> GenerationResult:
@@ -223,7 +234,7 @@ class GenBlazeAdapter:
         
         Args:
             prompt: Text prompt for image generation
-            model: Image model to use (defaults to Seedream)
+            model: Image model to use (defaults to qwen-image-plus via DashScope)
             size: Image size (e.g., "1024x1024", "768x768")
             timeout: Maximum wait time in seconds
             
@@ -282,19 +293,24 @@ class GenBlazeAdapter:
         """Get the appropriate video provider for a model."""
         from genblaze_gmicloud import GMICloudVideoProvider
         from genblaze_openai import SoraProvider
-        from genblaze_google import VeoVideoProvider
+        from genblaze_google import VeoProvider
         
-        # GMICloud models
-        if any(m in model for m in ["Kling", "veo3", "wan", "seedance"]):
+        # DashScope/Qwen models (wan2.7, happyhorse)
+        if any(m in model.lower() for m in ["wan2.7", "wan2.6", "happyhorse"]):
+            from pipeline.providers.dashscope import DashScopeVideoProvider
+            return DashScopeVideoProvider()
+        
+        # GMICloud models (Kling, Veo on GMI, Seedance)
+        if any(m in model for m in ["Kling", "seedance"]):
             return GMICloudVideoProvider()
         
         # OpenAI models
         if "sora" in model.lower():
             return SoraProvider()
         
-        # Google models
+        # Google Veo models
         if "veo" in model.lower():
-            return VeoVideoProvider()
+            return VeoProvider()
         
         return GMICloudVideoProvider()  # Default fallback
     
@@ -304,8 +320,13 @@ class GenBlazeAdapter:
         from genblaze_openai import DalleProvider
         from genblaze_google import ImagenProvider
         
+        # DashScope/Qwen image models
+        if any(m in model.lower() for m in ["qwen", "wanx", "wan2.7-image", "qwen-image"]):
+            from pipeline.providers.dashscope import DashScopeImageProvider
+            return DashScopeImageProvider()
+        
         # GMICloud models
-        if any(m in model for m in ["seedream", "seedance", "wan", "flux"]):
+        if any(m in model for m in ["seedream", "seedance", "flux"]):
             return GMICloudImageProvider()
         
         # OpenAI models
