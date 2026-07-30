@@ -128,37 +128,6 @@ class ValidActionResponse(BaseModel):
     reason: Optional[str] = None
 
 
-class StoryCapabilitiesResponse(BaseModel):
-    story_id: str
-    story_status: str
-    selected_scene_id: Optional[str] = None
-    selected_checkpoint_id: Optional[str] = None
-    story_actions: list[ValidActionResponse] = Field(default_factory=list)
-    scene_actions: list[ValidActionResponse] = Field(default_factory=list)
-    checkpoint_actions: list[ValidActionResponse] = Field(default_factory=list)
-    run_actions: list[ValidActionResponse] = Field(default_factory=list)
-
-
-class StoryOperationsAgentRequest(BaseModel):
-    instruction: str
-    scene_id: Optional[str] = None
-    execute: bool = True
-
-
-class StoryOperationsAgentResponse(BaseModel):
-    operation: str
-    target: str
-    message: str
-    allowed: bool = True
-    requires_confirmation: bool = False
-    executed: bool = False
-    reason: Optional[str] = None
-    story_patch: dict[str, Any] = Field(default_factory=dict)
-    scene_patch: dict[str, Any] = Field(default_factory=dict)
-    result: dict[str, Any] = Field(default_factory=dict)
-    valid_actions: list[str] = Field(default_factory=list)
-
-
 class StoryResponse(BaseModel):
     id: str
     title: str
