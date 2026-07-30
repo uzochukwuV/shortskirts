@@ -19,6 +19,31 @@ FEATURE_FLAG_DEFAULTS: dict[str, bool] = {
     "timeline_assembly": False,      # Enable AI-powered timeline assembly
     "agent_chat": False,            # Enable conversational agent interface
     "parallel_generation": True,     # Enable parallel scene generation (BUG-7 fix)
+    "use_genblaze": False,          # Use GenBlaze SDK instead of legacy providers
+}
+
+
+# GenBlaze provider mappings
+# Maps Dysentry provider names to GenBlaze models
+GENBLaze_VIDEO_MODELS = {
+    "dashscope": "Kling-Text2Video-V2.1-Master",
+    "aiml": "Kling-Text2Video-V2.1-Master",
+    "sora": "sora-2",
+    "veo": "veo3",
+    "kling": "Kling-Text2Video-V2.1-Master",
+    "wan": "wan2.6-t2v",
+    "cosmos": "cosmos-2.0",
+    "runway": "gen4_turbo",
+    "luma": "ray-2",
+}
+
+GENBLaze_IMAGE_MODELS = {
+    "qwen-image-edit-plus": "seedream-5.0-lite",
+    "qwen-image-plus": "seedream-5.0-lite",
+    "dall-e": "dall-e-3",
+    "imagen": "imagen-3.0",
+    "flux": "flux-schnell",
+    "seedream": "seedream-5.0-lite",
 }
 
 
@@ -209,3 +234,58 @@ def update_feature_flags(
         state["pipeline_config"]["feature_flags"] = state["feature_flags"]
     
     return state
+
+
+# GenBlaze helper functions
+
+def get_genblaze_video_model(provider_name: str) -> str | None:
+    """Get the GenBlaze video model for a given provider name."""
+    return GENBLaze_VIDEO_MODELS.get(provider_name.lower())
+
+
+def get_genblaze_image_model(provider_name: str) -> str | None:
+    """Get the GenBlaze image model for a given provider name."""
+    return GENBLaze_IMAGE_MODELS.get(provider_name.lower())
+
+
+def should_use_genblaze(
+    workflow_state: dict[str, Any] | str | None = None,
+    pipeline_config: dict[str, Any] | None = None,
+) -> bool:
+    """Check if GenBlaze SDK should be used for generation."""
+    return is_feature_enabled("use_genblaze", workflow_state, pipeline_config)
+
+
+def get_genblaze_preferred_model(
+    pipeline_config: dict[str, Any] | None = None,
+    modality: str = "video",
+) -> str | None:
+    """Get the preferred GenBlaze model from pipeline config.
+    
+    Args:
+        pipeline_config: Pipeline configuration
+        modality: Either "video" or "image"
+    
+    Returns:
+        GenBlaze model name or None
+    """
+    if not pipeline_config:
+        return None
+    
+    providers = pipeline_config.get("providers", {})
+    if modality == "video":
+        pref_list = providers.get("video_preference", [])
+    else:
+        pref_list = providers.get("image_preference", [])
+    
+    if not pref_list:
+        return None
+    
+    # Try each provider in order
+    model_map = GENBLaze_VIDEO_MODELS if modality == "video" else GENBLaze_IMAGE_MODELS
+    for provider in pref_list:
+        model = model_map.get(provider.lower())
+        if model:
+            return model
+    
+    return None

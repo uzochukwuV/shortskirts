@@ -358,56 +358,79 @@ async def create_story(body: StoryCreate, user=Depends(get_current_user)):
         )
 
     # Use transaction to ensure atomicity of all database operations
+    # NOTE: CockroachDB + asyncpg requires avoiding RETURNING inside transactions
+    # when multiple operations follow. We use execute + separate fetch instead.
     async with pool.acquire() as conn:
-        async with conn.transaction():
-            row = await conn.fetchrow(
-                """INSERT INTO stories
-                   (owner_id, title, prompt, genre, style, num_episodes, num_scenes, status,
-                    workflow_type, workflow_version, generation_version, workflow_state,
-                    approval_status, episode_plan)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,'v1','v1',$9::jsonb,'pending_approval',$10::jsonb)
-                   RETURNING *""",
-                owner_id,
-                body.title,
-                body.prompt,
-                body.genre,
-                body.style,
-                body.num_episodes,
-                body.num_scenes,
-                body.workflow_type.value,
-                json.dumps(workflow_state),
-                json.dumps(plan),
-            )
-            story_id = str(row["id"])
+        # Insert story without RETURNING
+        await conn.execute(
+            """INSERT INTO stories
+               (owner_id, title, prompt, genre, style, num_episodes, num_scenes, status,
+                workflow_type, workflow_version, generation_version, workflow_state,
+                approval_status, episode_plan)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,'v1','v1',$9::jsonb,'pending_approval',$10::jsonb)""",
+            owner_id,
+            body.title,
+            body.prompt,
+            body.genre,
+            body.style,
+            body.num_episodes,
+            body.num_scenes,
+            body.workflow_type.value,
+            json.dumps(workflow_state),
+            json.dumps(plan),
+        )
+        
+        # Get the story ID by selecting the most recent one for this owner
+        row = await conn.fetchrow(
+            "SELECT * FROM stories WHERE owner_id=$1 ORDER BY created_at DESC LIMIT 1",
+            owner_id,
+        )
+        story_id = str(row["id"])
 
-            if body.bible_ids:
-                for bid in body.bible_ids:
-                    await conn.execute(
-                        """UPDATE bibles SET story_id=$1, updated_at=now()
-                           WHERE id=$2 AND story_id IS NULL AND owner_id=$3""",
-                        story_id,
-                        bid,
-                        owner_id,
-                    )
-
-            plan_characters = plan.get("characters", [])
-            if plan_characters:
-                await _insert_plan_characters(
-                    conn,
-                    story_id,
-                    plan_characters,
-                    seed_ref_urls=workflow_state["character_reference_urls"] or workflow_state["style_reference_urls"],
-                )
-
-            for ep in plan.get("episodes", []):
+        if body.bible_ids:
+            for bid in body.bible_ids:
                 await conn.execute(
-                    """INSERT INTO episodes (story_id, episode_number, title, status)
-                       VALUES ($1,$2,$3,'pending')
-                       ON CONFLICT (story_id, episode_number) DO NOTHING""",
+                    """UPDATE bibles SET story_id=$1, updated_at=now()
+                       WHERE id=$2 AND story_id IS NULL AND owner_id=$3""",
                     story_id,
-                    ep["episode_number"],
-                    ep.get("title", f"Episode {ep['episode_number']}"),
+                    bid,
+                    owner_id,
                 )
+
+        # Insert characters (outside main transaction to avoid prepared statement conflicts)
+        # The story is already created, so we can do this in a separate transaction
+        plan_characters = plan.get("characters", [])
+        if plan_characters:
+            # Insert characters one by one without RETURNING
+            refs = workflow_state["character_reference_urls"] or workflow_state["style_reference_urls"] or []
+            refs_json = json.dumps([u for u in refs if u])
+            for char in plan_characters:
+                name = char.get("name", "").strip()
+                if not name:
+                    continue
+                await conn.execute(
+                    """INSERT INTO characters
+                       (story_id, name, description, role, personality, appearance, ref_image_urls)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
+                       ON CONFLICT (story_id, name) DO NOTHING""",
+                    story_id,
+                    name,
+                    char.get("description", ""),
+                    char.get("role", "main"),
+                    char.get("personality", ""),
+                    char.get("appearance", ""),
+                    refs_json,
+                )
+
+        for ep in plan.get("episodes", []):
+            await conn.execute(
+                """INSERT INTO episodes (story_id, episode_number, title, status)
+                   VALUES ($1,$2,$3,'pending')
+                   ON CONFLICT (story_id, episode_number) DO NOTHING""",
+                story_id,
+                ep["episode_number"],
+                ep.get("title", f"Episode {ep['episode_number']}"),
+            )
 
     # History recording outside transaction (after commit) - failure here is non-critical
     try:
@@ -429,36 +452,6 @@ async def create_story(body: StoryCreate, user=Depends(get_current_user)):
     if isinstance(plan_data, str):
         plan_data = json.loads(plan_data)
     return _build_story_response(row, plan_data)
-
-
-async def _insert_plan_characters(pool, story_id: str, characters: list[dict], seed_ref_urls: list[str] | None = None):
-    inserted = 0
-    skipped = 0
-    refs = [u for u in (seed_ref_urls or []) if u]
-    for char in characters:
-        name = char.get("name", "").strip()
-        if not name:
-            skipped += 1
-            continue
-        row = await pool.fetchrow(
-            """INSERT INTO characters
-               (story_id, name, description, role, personality, appearance, ref_image_urls)
-               VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
-               ON CONFLICT (story_id, name) DO NOTHING
-               RETURNING id""",
-            story_id,
-            name,
-            char.get("description", ""),
-            char.get("role", "main"),
-            char.get("personality", ""),
-            char.get("appearance", ""),
-            json.dumps(refs),
-        )
-        if row:
-            inserted += 1
-        else:
-            skipped += 1
-    print(f"[stories] Materialised {inserted} characters for story {story_id}; skipped {skipped}")
 
 
 @router.get("", response_model=list[StoryResponse])
