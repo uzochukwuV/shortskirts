@@ -141,6 +141,13 @@ class StreamingOrchestrator:
         if story_id in self._active_streams:
             await self._active_streams[story_id].put(event)
     
+    async def _put_event(self, story_id: str, event: SceneProgressEvent) -> None:
+        """Internal method to put event into queue (also prints for testing)."""
+        if story_id in self._active_streams:
+            await self._active_streams[story_id].put(event)
+        # Also print for visibility
+        print(f"  [{event.type}] {event.status}: {event.message}")
+    
     async def stream(
         self,
         story_id: str,
@@ -170,7 +177,7 @@ class StreamingOrchestrator:
         """
         Generate scene with streaming events.
         
-        Yields progress events while generating.
+        Emits progress events while generating.
         Returns (video_url, exit_frame_url, video_bytes, task_id).
         """
         run_id = str(uuid.uuid4())[:8]
@@ -178,8 +185,8 @@ class StreamingOrchestrator:
         references = references or []
         start_time = time.time()
         
-        # Emit queued event
-        await self.emit(story_id, SceneProgressEvent(
+        # Emit started event
+        event = SceneProgressEvent(
             type=StreamEventType.STEP_STARTED.value,
             timestamp=datetime.utcnow().isoformat(),
             run_id=run_id,
@@ -191,9 +198,10 @@ class StreamingOrchestrator:
             message=f"Starting scene {scene_id}: {title}",
             scene_id=scene_id,
             scene_title=title,
-        ))
+        )
+        await self._put_event(story_id, event)
         
-        # Emit progress events during polling
+        # Build step
         step = Step(provider='dashscope-video', model=model, prompt=prompt)
         step.params = {
             'duration': 5,
@@ -205,9 +213,11 @@ class StreamingOrchestrator:
         step.modality = Modality.VIDEO
         
         # Submit
+        print(f"[streaming] Submitting task for scene {scene_id}")
         task_id = self._provider.submit(step)
         
-        await self.emit(story_id, SceneProgressEvent(
+        # Emit processing event
+        event = SceneProgressEvent(
             type=StreamEventType.STEP_PROGRESS.value,
             timestamp=datetime.utcnow().isoformat(),
             run_id=run_id,
@@ -220,21 +230,22 @@ class StreamingOrchestrator:
             request_id=task_id,
             scene_id=scene_id,
             scene_title=title,
-        ))
+        )
+        await self._put_event(story_id, event)
         
         # Poll with progress updates
         last_pct = 0.1
         while True:
-            await asyncio.sleep(10)  # Poll every 10 seconds
+            await asyncio.sleep(15)  # Poll every 15 seconds
             
             status = self._provider._poll_status(task_id, timeout=5)
             elapsed = time.time() - start_time
             
             if status == "RUNNING":
                 # Estimate progress (DashScope typically takes 60-120s)
-                last_pct = min(0.1 + (elapsed / 120) * 0.8, 0.9)
+                last_pct = min(0.1 + (elapsed / 90) * 0.7, 0.9)
                 
-                await self.emit(story_id, SceneProgressEvent(
+                event = SceneProgressEvent(
                     type=StreamEventType.STEP_PROGRESS.value,
                     timestamp=datetime.utcnow().isoformat(),
                     run_id=run_id,
@@ -243,14 +254,15 @@ class StreamingOrchestrator:
                     status="processing",
                     progress_pct=last_pct,
                     elapsed_sec=elapsed,
-                    message=f"Generating video... ({int(elapsed)}s elapsed)",
+                    message=f"Generating video... {int(last_pct * 100)}% complete",
                     request_id=task_id,
                     scene_id=scene_id,
                     scene_title=title,
-                ))
+                )
+                await self._put_event(story_id, event)
             
             elif status == "SUCCEEDED":
-                await self.emit(story_id, SceneProgressEvent(
+                event = SceneProgressEvent(
                     type=StreamEventType.STEP_COMPLETED.value,
                     timestamp=datetime.utcnow().isoformat(),
                     run_id=run_id,
@@ -263,11 +275,12 @@ class StreamingOrchestrator:
                     request_id=task_id,
                     scene_id=scene_id,
                     scene_title=title,
-                ))
+                )
+                await self._put_event(story_id, event)
                 break
             
             elif status == "FAILED":
-                await self.emit(story_id, SceneProgressEvent(
+                event = SceneProgressEvent(
                     type=StreamEventType.STEP_FAILED.value,
                     timestamp=datetime.utcnow().isoformat(),
                     run_id=run_id,
@@ -280,10 +293,12 @@ class StreamingOrchestrator:
                     request_id=task_id,
                     scene_id=scene_id,
                     scene_title=title,
-                ))
+                )
+                await self._put_event(story_id, event)
                 raise Exception("Video generation failed")
         
         # Fetch output
+        print(f"[streaming] Fetching output for task {task_id}")
         step = self._provider.fetch_output(task_id, step)
         video_url = step.assets[0].url
         
