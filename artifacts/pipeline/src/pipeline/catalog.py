@@ -467,3 +467,259 @@ async def ensure_catalog_tables() -> None:
         statement = statement.strip()
         if statement:
             await pool.execute(statement)
+
+
+# ─── Scene Continuity Tracking ─────────────────────────────────────────────────
+
+"""
+Continuity tracking for scene-to-scene consistency.
+Stores exit frame metadata (lighting, palette, camera state) for
+automatic injection into next scene's generation.
+"""
+
+import base64
+import io
+from dataclasses import asdict, dataclass, field
+from typing import Optional
+
+try:
+    from PIL import Image
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+
+try:
+    from storage.b2 import upload_bytes, build_key
+    HAS_B2 = True
+except ImportError:
+    HAS_B2 = False
+
+
+@dataclass
+class ContinuityState:
+    """Visual state at end of scene for continuity."""
+    
+    story_id: str
+    episode_id: str
+    scene_number: int
+    
+    # Exit frame
+    exit_frame_url: Optional[str] = None
+    
+    # Color palette
+    dominant_colors: list[str] = field(default_factory=list)  # Hex colors
+    
+    # Lighting
+    lighting_type: str = "natural"  # natural, golden_hour, dramatic, neon
+    color_temperature: str = "neutral"  # warm, neutral, cool
+    
+    # Camera state
+    camera_angle: str = "eye_level"
+    camera_motion: str = "static"
+    
+    # Scene info
+    mood: str = ""
+    style: str = ""
+    model: str = ""
+    seed: int = 0
+    
+    def to_dict(self) -> dict:
+        return asdict(self)
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> ContinuityState:
+        return cls(**data)
+
+
+@dataclass  
+class SceneContext:
+    """Context for next scene generation with continuity."""
+    
+    previous_exit_frame_url: Optional[str] = None
+    previous_lighting: str = "natural"
+    previous_color_temp: str = "neutral"
+    previous_camera_angle: str = "eye_level"
+    previous_camera_motion: str = "static"
+    previous_dominant_colors: list[str] = field(default_factory=list)
+    previous_mood: str = ""
+    
+    # Generated continuity guidance for prompt
+    continuity_note: str = ""
+
+
+def extract_color_palette(image_bytes: bytes, num_colors: int = 5) -> list[str]:
+    """Extract dominant colors from image as hex strings."""
+    if not HAS_PIL:
+        return []
+    
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        img = img.convert("RGB")
+        img = img.resize((100, 100))
+        
+        pixels = list(img.getdata())
+        color_counts: dict[tuple, int] = {}
+        
+        for r, g, b in pixels:
+            r_q = (r // 32) * 32
+            g_q = (g // 32) * 32
+            b_q = (b // 32) * 32
+            color_counts[(r_q, g_q, b_q)] = color_counts.get((r_q, g_q, b_q), 0) + 1
+        
+        sorted_colors = sorted(color_counts.items(), key=lambda x: x[1], reverse=True)
+        
+        hex_colors = []
+        for (r, g, b), _ in sorted_colors[:num_colors]:
+            hex_colors.append(f"#{r:02x}{g:02x}{b:02x}")
+        
+        return hex_colors
+        
+    except Exception as e:
+        print(f"[catalog] Color extraction failed: {e}")
+        return []
+
+
+def infer_lighting_from_colors(colors: list[str]) -> str:
+    """Infer lighting type from dominant colors."""
+    if not colors:
+        return "natural"
+    
+    try:
+        r_avg, g_avg, b_avg = 0, 0, 0
+        count = 0
+        
+        for hex_color in colors:
+            hex_color = hex_color.lstrip("#")
+            r = int(hex_color[0:2], 16)
+            g = int(hex_color[2:4], 16)
+            b = int(hex_color[4:6], 16)
+            r_avg += r
+            g_avg += g
+            b_avg += b
+            count += 1
+        
+        if count == 0:
+            return "natural"
+        
+        r_avg //= count
+        g_avg //= count
+        b_avg //= count
+        
+        # Warm tones = golden hour
+        if r_avg > g_avg > b_avg and r_avg - b_avg > 30:
+            return "golden_hour"
+        
+        # Cool tones = dramatic/night
+        if b_avg > r_avg and b_avg - r_avg > 30:
+            return "dramatic"
+        
+        # High saturation = neon
+        max_val = max(r_avg, g_avg, b_avg)
+        min_val = min(r_avg, g_avg, b_avg)
+        saturation = (max_val - min_val) / max_val if max_val > 0 else 0
+        
+        if saturation > 0.7 and max_val > 150:
+            return "neon"
+        
+        return "natural"
+        
+    except Exception:
+        return "natural"
+
+
+async def create_continuity_state(
+    story_id: str,
+    episode_id: str,
+    scene_number: int,
+    exit_frame_bytes: bytes,
+    prompt: str = "",
+    model: str = "",
+    seed: int = 0,
+    mood: str = "",
+    style: str = "",
+    camera_motion: str = "static",
+    camera_angle: str = "eye_level",
+) -> ContinuityState:
+    """Create continuity state from exit frame.
+    
+    Extracts color palette, infers lighting, uploads to B2.
+    """
+    # Extract color palette
+    dominant_colors = extract_color_palette(exit_frame_bytes)
+    
+    # Infer lighting
+    lighting_type = infer_lighting_from_colors(dominant_colors)
+    
+    # Upload exit frame to B2
+    exit_frame_url = None
+    if HAS_B2:
+        try:
+            key = build_key(story_id, "episodes", episode_id, "scenes", f"scene_{scene_number}_exit.png")
+            exit_frame_url = upload_bytes(exit_frame_bytes, key, "image/png")
+        except Exception as e:
+            print(f"[catalog] B2 upload failed: {e}")
+    
+    return ContinuityState(
+        story_id=story_id,
+        episode_id=episode_id,
+        scene_number=scene_number,
+        exit_frame_url=exit_frame_url,
+        dominant_colors=dominant_colors,
+        lighting_type=lighting_type,
+        color_temperature="warm" if "golden" in lighting_type else "neutral",
+        camera_angle=camera_angle,
+        camera_motion=camera_motion,
+        mood=mood,
+        style=style,
+        model=model,
+        seed=seed,
+    )
+
+
+def build_scene_context(
+    previous: Optional[ContinuityState],
+) -> SceneContext:
+    """Build continuity context for next scene from previous state."""
+    if not previous:
+        return SceneContext()
+    
+    context = SceneContext(
+        previous_exit_frame_url=previous.exit_frame_url,
+        previous_lighting=previous.lighting_type,
+        previous_color_temp=previous.color_temperature,
+        previous_camera_angle=previous.camera_angle,
+        previous_camera_motion=previous.camera_motion,
+        previous_dominant_colors=previous.dominant_colors,
+        previous_mood=previous.mood,
+    )
+    
+    # Build continuity guidance
+    continuity_parts = []
+    
+    if previous.exit_frame_url:
+        continuity_parts.append("Maintain visual continuity from the previous scene.")
+    
+    if previous.lighting_type != "natural":
+        continuity_parts.append(f"Continue the {previous.lighting_type} lighting style.")
+    
+    if previous.camera_motion != "static":
+        continuity_parts.append(f"Camera continues with {previous.camera_motion} movement.")
+    
+    if previous.dominant_colors:
+        colors_str = ", ".join(previous.dominant_colors[:3])
+        continuity_parts.append(f"Color palette: {colors_str}.")
+    
+    context.continuity_note = " ".join(continuity_parts)
+    
+    return context
+
+
+def inject_continuity_into_prompt(
+    base_prompt: str,
+    context: SceneContext,
+) -> str:
+    """Inject continuity guidance into scene prompt."""
+    if not context.continuity_note:
+        return base_prompt
+    
+    return base_prompt.strip() + f"\n\n{context.continuity_note}"
