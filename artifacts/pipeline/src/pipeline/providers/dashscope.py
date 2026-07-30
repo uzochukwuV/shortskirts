@@ -181,7 +181,12 @@ class DashScopeVideoProvider(DashScopeBase):
             ) from exc
 
     def _build_video_payload(self, step: Step) -> tuple[str, dict]:
-        """Build DashScope video payload. Returns (endpoint, payload)."""
+        """Build DashScope video payload with enhanced quality parameters.
+        
+        Returns (endpoint, payload) tuple.
+        """
+        import random
+        
         model = step.model
         prompt = step.prompt or ""
         images = step.inputs or []
@@ -189,7 +194,7 @@ class DashScopeVideoProvider(DashScopeBase):
         
         endpoint = "/services/aigc/video-generation/video-synthesis"
         
-        # Select model based on capability
+        # Select model based on capability (prefer reference models for quality)
         if capability == "t2v":
             model = model or DASHSCOPE_HAPPYHORSE_T2V_MODEL
         elif capability == "i2v":
@@ -199,7 +204,31 @@ class DashScopeVideoProvider(DashScopeBase):
         
         resolution = step.params.get("resolution", "1080P")
         ratio = step.params.get("ratio", "16:9")
-        duration = step.params.get("duration", 5)
+        # Use longer duration for better motion (up to 8 seconds)
+        duration = min(step.params.get("duration", 5), 8)
+        
+        # Enhanced quality parameters
+        seed = step.params.get("seed")
+        if seed is None:
+            seed = random.randint(0, 2147483647)  # DashScope seed limit
+        
+        # Build base parameters
+        params = {
+            "resolution": resolution,
+            "ratio": ratio,
+            "duration": duration,
+            "watermark": False,
+            "seed": seed,
+        }
+        
+        # Add quality-enhancing parameters
+        # prompt_extend enhances the prompt for better results
+        if capability == "t2v":
+            params["prompt_extend"] = True
+        
+        # For better quality, can add these if supported by the model
+        if step.params.get("short_video_model") is not None:
+            params["short_video_model"] = step.params.get("short_video_model")
         
         if capability == "r2v" and images:
             payload = {
@@ -208,12 +237,7 @@ class DashScopeVideoProvider(DashScopeBase):
                     "prompt": prompt,
                     "media": [{"type": "reference_image", "url": url} for url in images[:9]],
                 },
-                "parameters": {
-                    "resolution": resolution,
-                    "ratio": ratio,
-                    "duration": duration,
-                    "watermark": False,
-                },
+                "parameters": params,
             }
         elif capability == "i2v" and images:
             payload = {
@@ -222,24 +246,13 @@ class DashScopeVideoProvider(DashScopeBase):
                     "prompt": prompt,
                     "media": [{"type": "first_frame", "url": images[0]}],
                 },
-                "parameters": {
-                    "resolution": resolution,
-                    "ratio": ratio,
-                    "duration": duration,
-                    "watermark": False,
-                },
+                "parameters": params,
             }
         else:
             payload = {
                 "model": model,
                 "input": {"prompt": prompt},
-                "parameters": {
-                    "resolution": resolution,
-                    "ratio": ratio,
-                    "duration": duration,
-                    "prompt_extend": True,
-                    "watermark": False,
-                },
+                "parameters": params,
             }
         
         return endpoint, payload

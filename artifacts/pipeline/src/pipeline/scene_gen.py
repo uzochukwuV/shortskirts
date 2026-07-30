@@ -11,7 +11,7 @@ from pipeline.story_agent import build_scene_prompt
 from pipeline.provider_status import get_provider_status
 from pipeline.provider_policy import run_provider_step
 from pipeline.pipeline_config import normalize_pipeline_config
-from pipeline.media_tools import extract_last_frame_jpeg
+from pipeline.media_tools import extract_last_frame_png
 from pipeline.generation_agent import plan_scene_video
 from pipeline.provider_executor import execute_ordered_attempts
 from pipeline.runtime_context import get_job_context
@@ -501,11 +501,14 @@ async def extract_exit_frame_from_bytes(
     scene_number: int,
 ) -> Optional[str]:
     """Extract last frame from in-memory video bytes and upload to B2.
-    Never reads from B2 — works entirely from bytes we already downloaded."""
+    
+    Uses PNG format for higher quality (less compression artifacts).
+    PNG preserves more detail for use as I2V/R2V references in next scene.
+    """
     try:
-        frame_bytes = await extract_last_frame_jpeg(clip_bytes)
-        key = build_key(story_id, "episodes", episode_id, "scenes", f"scene_{scene_number}_exit.jpg")
-        return upload_bytes(frame_bytes, key, "image/jpeg")
+        frame_bytes = await extract_last_frame_png(clip_bytes)
+        key = build_key(story_id, "episodes", episode_id, "scenes", f"scene_{scene_number}_exit.png")
+        return upload_bytes(frame_bytes, key, "image/png")
 
     except Exception as e:
         print(f"[scene_gen] Exit frame extraction failed: {e}")

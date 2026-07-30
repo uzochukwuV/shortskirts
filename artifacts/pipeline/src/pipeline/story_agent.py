@@ -296,37 +296,106 @@ async def build_scene_prompt(
     style: str = "",
     media_kind: str = "video",
 ) -> str:
+    """Build enhanced scene prompt with cinematography guidance.
+    
+    Produces prompts optimized for Qwen/Wan video models with:
+    - Cinematic shot composition
+    - Camera motion descriptions
+    - Lighting atmosphere
+    - Mood and emotion guidance
+    """
     base = scene.get("visual_prompt", scene.get("description", ""))
     location = scene.get("location", "")
     mood = scene.get("mood", "")
     action = scene.get("action", "")
+    shot_type = scene.get("shot_type", "medium shot")
+    camera_motion = scene.get("camera_motion", "static")
+    lighting = scene.get("lighting", "")
 
     frame_ratio = (
         scene.get("frame_ratio")
         or _safe_story_ratio(story_context)
         or "16:9"
     )
-    if media_kind == "image":
-        media_line = (
-            "Single still-image composition, clear subject separation, no motion blur, "
-            "no collage layout, no text overlay, high continuity with the previous scene."
-        )
+    
+    # Build cinematic prompt components
+    parts = [base.strip()]
+    
+    # Cinematography section
+    if shot_type:
+        parts.append(f"Shot: {shot_type}.")
+    
+    # Camera motion for dynamic videos
+    if camera_motion and camera_motion != "static":
+        parts.append(f"Camera: {camera_motion}.")
     else:
-        media_line = (
-            "Cinematic motion-friendly composition, strong lighting, detailed environment, "
-            "consistent character design."
-        )
+        parts.append("Camera: stable, professional cinematography.")
+    
+    # Location with atmosphere
+    if location:
+        parts.append(f"Setting: {location}.")
+    
+    # Lighting atmosphere
+    if lighting:
+        parts.append(f"Lighting: {lighting}.")
+    elif mood:
+        # Inferred lighting from mood
+        mood_lighting = {
+            "dramatic": "high contrast, dramatic shadows, single key light",
+            "serene": "soft diffused lighting, warm tones, natural",
+            "intense": "harsh lighting, strong shadows, tension",
+            "mysterious": "low key, volumetric fog, rim lighting",
+            "romantic": "golden hour, warm soft light, lens flare",
+            "dark": "low light, deep shadows, noir style",
+        }
+        lighting_hint = mood_lighting.get(mood.lower(), "")
+        if lighting_hint:
+            parts.append(f"Lighting: {lighting_hint}.")
+    
+    # Action with dynamic verbs
+    if action:
+        parts.append(f"Action: {action}.")
+    
+    # Mood and emotion
+    if mood:
+        parts.append(f"Mood: {mood}, emotional depth.")
+    
+    # Previous scene continuity (critical for multi-scene stories)
+    if previous_scene_summary:
+        parts.append(f"Continuity: {previous_scene_summary}")
+    
+    # Style guidance (make it neutral, not anime-specific)
+    if style:
+        parts.append(f"Visual style: {style}.")
+    
+    # Technical specs
+    if media_kind == "video":
+        parts.append(f"Frame ratio: {frame_ratio}, high quality production value.")
+        parts.append("Cinematic, smooth motion, professional film quality.")
+    else:
+        parts.append("High detail still image, no text overlay.")
+    
+    # Join with proper spacing
+    prompt = " ".join(parts)
+    
+    # Ensure prompt isn't too long (Qwen models have limits)
+    if len(prompt) > 1000:
+        prompt = prompt[:997] + "..."
+    
+    return prompt
 
-    parts = [
-        base,
-        f"Location: {location}." if location else "",
-        f"Mood: {mood}." if mood else "",
-        f"Action: {action}." if action else "",
-        f"Previous context: {previous_scene_summary}." if previous_scene_summary else "",
-        f"Style: {style}, {media_line}",
-        f"Frame ratio: {frame_ratio}.",
-    ]
-    return " ".join(p for p in parts if p)
+
+# Mapping of moods to cinematography guidance
+MOOD_CINEMATOGRAPHY = {
+    "dramatic": {"lighting": "high contrast", "camera": "slow push-in"},
+    "serene": {"lighting": "soft diffused", "camera": "slow tracking"},
+    "intense": {"lighting": "harsh", "camera": "handheld shake"},
+    "mysterious": {"lighting": "low key fog", "camera": "dolly in"},
+    "romantic": {"lighting": "golden warm", "camera": "slow orbit"},
+    "comedic": {"lighting": "bright flat", "camera": "quick cuts"},
+    "horror": {"lighting": "single source dark", "camera": "static"},
+    "epic": {"lighting": "rim light", "camera": "aerial sweep"},
+}
 
 
 async def suggest_story_edit(story: dict, instruction: str) -> dict:

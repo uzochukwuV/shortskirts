@@ -22,7 +22,7 @@ from typing import Optional
 from dataclasses import dataclass
 
 from storage.b2 import upload_bytes, download_url_to_bytes, build_key
-from pipeline.media_tools import extract_last_frame_jpeg
+from pipeline.media_tools import extract_last_frame_png
 
 
 @dataclass
@@ -140,10 +140,13 @@ class GenBlazeSceneGenerator:
         clip_bytes: bytes,
         key: str,
     ) -> Optional[str]:
-        """Extract last frame from video and upload to B2."""
+        """Extract last frame from video and upload to B2.
+        
+        Uses PNG format for higher quality references.
+        """
         try:
-            frame_bytes = await extract_last_frame_jpeg(clip_bytes)
-            return upload_bytes(frame_bytes, key, "image/jpeg")
+            frame_bytes = await extract_last_frame_png(clip_bytes)
+            return upload_bytes(frame_bytes, key, "image/png")
         except Exception as e:
             print(f"[genblaze_scene] Frame extraction failed: {e}")
             return None
