@@ -123,7 +123,7 @@ Return ONLY valid JSON with this exact structure:
           "location": "specific location",
           "mood": "emotional tone",
           "action": "key action or event",
-          "visual_prompt": "detailed cinematic generation prompt, anime style, specific visual details",
+          "visual_prompt": "detailed cinematic generation prompt, specific visual details",
           "duration_seconds": 6,
           "narration": "optional narration or voiceover line for the scene"
         }
@@ -133,7 +133,7 @@ Return ONLY valid JSON with this exact structure:
 }"""
 
 WORKFLOW_SYSTEM_PROMPTS = {
-    "creator_series": f"""You are a creative anime showrunner. Given a story premise, genre, and style,
+    "creator_series": f"""You are a creative video series showrunner. Given a story premise, genre, and style,
 generate a detailed serialized episode plan. Focus on: consistent cast across episodes, escalating story arcs,
 compelling character development, and cinematic visual prompts for each scene.
 {_SHARED_JSON_SCHEMA}""",
@@ -265,20 +265,21 @@ async def generate_episode_plan(
 
 # ─── Character image prompt ───────────────────────────────────────────────────
 
-async def generate_character_image_prompt(character: dict, style: str = "anime") -> str:
+async def generate_character_image_prompt(character: dict, style: str = "") -> str:
+    style_hint = f"Style: {style}" if style else ""
     user_msg = (
         f"Write a detailed image generation prompt for this character:\n"
         f"Name: {character['name']}\n"
         f"Appearance: {character.get('appearance', '')}\n"
         f"Personality: {character.get('personality', '')}\n"
         f"Role: {character.get('role', 'main')}\n\n"
-        f"Style: {style}. Include: character facing forward, full body or portrait, "
+        f"{style_hint}. Include: character facing forward, full body or portrait, "
         f"specific hair color and style, eye color, clothing details, expression. "
-        f"End with: high quality anime art, detailed illustration."
+        f"End with: high quality illustration, detailed art."
     )
     return await _chat(
         messages=[
-            {"role": "system", "content": "You are an expert at writing image generation prompts for anime characters. Write concise, vivid prompts under 200 words."},
+            {"role": "system", "content": "You are an expert at writing image generation prompts for character portraits. Write concise, vivid prompts under 200 words."},
             {"role": "user", "content": user_msg},
         ],
         temperature=0.7,
@@ -292,7 +293,7 @@ async def build_scene_prompt(
     scene: dict,
     story_context: dict,
     previous_scene_summary: str = "",
-    style: str = "anime",
+    style: str = "",
     media_kind: str = "video",
 ) -> str:
     base = scene.get("visual_prompt", scene.get("description", ""))

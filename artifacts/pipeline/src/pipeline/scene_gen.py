@@ -42,7 +42,7 @@ async def generate_scene_clip(
     character_refs: list[str],
     previous_exit_frame_url: Optional[str],
     previous_scene_summary: str = "",
-    style: str = "anime",
+    style: str = "",
     preferred_provider: Optional[str] = None,
 ) -> dict:
     scene_number = scene["scene_number"]
@@ -56,9 +56,18 @@ async def generate_scene_clip(
     requested_ratio = _requested_video_ratio(story_context, pipeline_config)
     requested_duration = int(media_config.get("duration_seconds") or 5)
     max_refs = int(continuity_config.get("max_reference_images") or 8)
-    reference_images = [u for u in character_refs if u][:max_refs]
-    if not reference_images and previous_exit_frame_url:
-        reference_images = [previous_exit_frame_url]
+    
+    # Build reference images list - always include previous exit frame for continuity
+    reference_images = [u for u in character_refs if u]
+    
+    # Always include previous exit frame for scene chaining (if enabled)
+    use_previous_exit_frame = continuity_config.get("use_previous_exit_frame", True)
+    if use_previous_exit_frame and previous_exit_frame_url:
+        if previous_exit_frame_url not in reference_images:
+            reference_images.insert(0, previous_exit_frame_url)
+    
+    # Limit to max_refs
+    reference_images = reference_images[:max_refs]
 
     seed_frame_url = None
     provider_status = await get_provider_status()
@@ -78,7 +87,10 @@ async def generate_scene_clip(
         raise RuntimeError(agent_plan.user_message or agent_plan.handoff_reason or "Video generation requires user intervention")
 
     if reference_images:
-        prompt = f"{prompt}\n\nMaintain continuity with the available character and scene reference images."
+        continuity_note = "Maintain visual continuity with the previous scene's exit frame."
+        if len(reference_images) > 1:
+            continuity_note = "Maintain continuity with character references and the previous scene's exit frame."
+        prompt = f"{prompt}\n\n{continuity_note}"
 
     async def _run_attempt(attempt: dict) -> Optional[str]:
         attempt_refs = _reference_images_for_attempt(reference_images, attempt)
@@ -128,7 +140,7 @@ async def generate_scene_clip(
 
 
 async def _build_seed_frame(story_id: str, episode_id: str, scene_number: int, prompt: str) -> Optional[str]:
-    image_bytes = await generate_image_bytes(f"{prompt}, single cinematic first frame, anime style")
+    image_bytes = await generate_image_bytes(f"{prompt}, single cinematic first frame")
     if not image_bytes:
         return None
     key = build_key(story_id, "episodes", episode_id, "scenes", f"scene_{scene_number}_seed.jpg")

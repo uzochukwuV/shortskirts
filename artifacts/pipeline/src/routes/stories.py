@@ -1022,21 +1022,38 @@ async def generate_story(
     user=Depends(get_current_user),
 ):
     pool = await get_pool()
-    story = await pool.fetchrow(
-        "SELECT * FROM stories WHERE id=$1 AND owner_id=$2",
+    
+    # Use atomic conditional UPDATE to prevent race conditions
+    # Only update if story exists and status is NOT 'generating' or 'checkpoint_review'
+    updated_story = await pool.fetchrow(
+        """UPDATE stories 
+           SET status='generating', updated_at=now() 
+           WHERE id=$1 AND owner_id=$2 
+           AND status NOT IN ('generating', 'checkpoint_review')
+           RETURNING *""",
         story_id,
         user_id(user),
     )
-    if not story:
-        raise HTTPException(status_code=404, detail="Story not found")
-    if story["status"] in {"generating", "checkpoint_review"}:
-        raise HTTPException(status_code=409, detail="Generation already in progress")
-    if story["status"] == "draft":
-        raise HTTPException(
-            status_code=400,
-            detail="Outline must be approved before generation. Call PUT /approve-outline first.",
+    
+    if not updated_story:
+        # Check why it wasn't updated to give proper error message
+        existing_story = await pool.fetchrow(
+            "SELECT * FROM stories WHERE id=$1 AND owner_id=$2",
+            story_id,
+            user_id(user),
         )
+        if not existing_story:
+            raise HTTPException(status_code=404, detail="Story not found")
+        if existing_story["status"] in {"generating", "checkpoint_review"}:
+            raise HTTPException(status_code=409, detail="Generation already in progress")
+        if existing_story["status"] == "draft":
+            raise HTTPException(
+                status_code=400,
+                detail="Outline must be approved before generation. Call PUT /approve-outline first.",
+            )
+        raise HTTPException(status_code=409, detail="Cannot start generation")
 
+    # Create job after successfully updating story status
     job_row = await pool.fetchrow(
         """INSERT INTO generation_jobs
            (entity_type, entity_id, status, total_steps, current_step, job_type)
@@ -1046,10 +1063,6 @@ async def generate_story(
     )
     job_id = str(job_row["id"])
     await enqueue_job(job_id, workload=WORKLOAD_STORY)
-    await pool.execute(
-        "UPDATE stories SET status='generating', updated_at=now() WHERE id=$1",
-        story_id,
-    )
 
     return GenerationJobResponse(
         id=job_id,

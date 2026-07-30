@@ -358,7 +358,7 @@ async def generate_with_coordinator(
     previous_exit_frame_url: Optional[str] = None,
     previous_scene_image_url: Optional[str] = None,
     previous_scene_summary: str = "",
-    style: str = "anime",
+    style: str = "",
 ) -> tuple[dict[str, Any], GenerationPlan]:
     from pipeline.provider_status import get_provider_status
     from pipeline.narrated_image_story import generate_narrated_scene_image
