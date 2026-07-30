@@ -142,16 +142,10 @@ export default function Dashboard() {
               {latestStory?.description || "Continue a story from the editor, or use schedule and publishing to automate release."}
             </p>
             <div className="mt-6 flex flex-wrap gap-3">
-              {latestStory ? (
+              {latestStory && (
                 <Link to={`/editor/${latestStory.id}`}>
                   <Button>
                     Open latest story <ArrowRight className="h-4 w-4" />
-                  </Button>
-                </Link>
-              ) : (
-                <Link to="/">
-                  <Button>
-                    Go to landing <ArrowRight className="h-4 w-4" />
                   </Button>
                 </Link>
               )}
