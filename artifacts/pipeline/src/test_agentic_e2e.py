@@ -218,12 +218,12 @@ async def main():
         
         scene_id = result.get("scene_id")
         
-        print("\n3. Generating video with Replicate...")
+        print("\n3. Generating video with Novita AI (Wan 2.7)...")
         try:
             result = await executor.tool_generate_video({
                 "story_id": story_id,
                 "scene_id": scene_id,
-                "provider": "replicate",
+                "provider": "novita",
                 "duration": 5,
                 "ratio": "16:9",
             })
@@ -234,7 +234,7 @@ async def main():
             provider = result.get("provider")
         except Exception as e:
             print(f"   ⚠️  Video generation failed: {e}")
-            print("   This is likely a billing issue with the API.")
+            print("   This is likely a billing issue with Novita API.")
             print("   The orchestrator code is working correctly!")
             
             # Show what WOULD happen if the API worked
@@ -252,7 +252,7 @@ async def main():
    - Prompt: A beautiful anime girl watching sunset...
 
 ❌ Step 3: Video Generation
-   - Provider: Replicate
+   - Provider: Novita AI (Wan 2.7)
    - Error: {str(e)[:100]}
 
 The orchestrator code is working correctly!

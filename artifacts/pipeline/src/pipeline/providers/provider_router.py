@@ -7,6 +7,7 @@ based on availability, cost, capability, or explicit selection.
 Supported providers:
 - veo3: Google Veo 3 via Veo3API (T2V + i2v, high quality)
 - dashscope: Alibaba DashScope (WanX, HappyHorse) - lower cost
+- novita: Novita AI (Wan 2.7 T2V/I2V/R2V) - reference video support
 - replicate: Replicate API (various models)
 - decart: Decart Lucy (V2V only - video editing, NOT T2V)
 """
@@ -26,6 +27,7 @@ class ProviderType(Enum):
     """Supported provider types."""
     VEO3 = "veo3"
     DASHSCOPE = "dashscope"
+    NOVITA = "novita"
     REPLICATE = "replicate"
     DECART = "decart"
 
@@ -93,7 +95,25 @@ class VideoProviderRouter:
                 print(f"[router] DashScope not available: {e}")
                 self._configs[ProviderType.DASHSCOPE].enabled = False
         
-        # Replicate - Third priority
+        # Novita AI - Third priority (Wan 2.7 models)
+        novita_enabled = bool(os.environ.get("NOVITA_API_KEY"))
+        self._configs[ProviderType.NOVITA] = ProviderConfig(
+            provider_type=ProviderType.NOVITA,
+            enabled=novita_enabled,
+            priority=3,
+            api_key=os.environ.get("NOVITA_API_KEY"),
+        )
+        
+        if novita_enabled:
+            try:
+                from pipeline.providers.novita import NovitaVideoProvider
+                self._providers[ProviderType.NOVITA] = NovitaVideoProvider()
+                print("[router] Novita AI provider initialized")
+            except ImportError as e:
+                print(f"[router] Novita not available: {e}")
+                self._configs[ProviderType.NOVITA].enabled = False
+        
+        # Replicate - Fourth priority
         replicate_enabled = bool(os.environ.get("REPLICATE_API_TOKEN") or os.environ.get("REPLICATE_API_KEY"))
         self._configs[ProviderType.REPLICATE] = ProviderConfig(
             provider_type=ProviderType.REPLICATE,
@@ -116,7 +136,7 @@ class VideoProviderRouter:
         self._configs[ProviderType.DECART] = ProviderConfig(
             provider_type=ProviderType.DECART,
             enabled=decart_enabled,
-            priority=4,
+            priority=5,
             api_key=os.environ.get("DECART_API_KEY"),
         )
         

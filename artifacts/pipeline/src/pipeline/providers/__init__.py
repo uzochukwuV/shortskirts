@@ -5,6 +5,7 @@ Exports:
 - Veo3VideoProvider
 - DashScopeVideoProvider
 - DashScopeImageProvider  
+- NovitaVideoProvider
 - ReplicateProvider
 - DecartVideoProvider (V2V only - not for T2V)
 - VideoProviderRouter
@@ -18,6 +19,8 @@ from pipeline.providers.dashscope import (
     DashScopeVideoProvider,
     DashScopeImageProvider,
 )
+
+from pipeline.providers.novita import NovitaVideoProvider
 
 from pipeline.providers.replicate import ReplicateProvider
 
@@ -39,6 +42,8 @@ __all__ = [
     # DashScope
     "DashScopeVideoProvider",
     "DashScopeImageProvider",
+    # Novita AI
+    "NovitaVideoProvider",
     # Replicate
     "ReplicateProvider",
     # Decart (V2V only)

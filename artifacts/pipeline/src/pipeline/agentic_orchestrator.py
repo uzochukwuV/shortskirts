@@ -385,6 +385,8 @@ class ToolExecutor:
                 provider_type = ProviderType.DASHSCOPE
             elif provider_str.lower() == "veo3":
                 provider_type = ProviderType.VEO3
+            elif provider_str.lower() == "novita":
+                provider_type = ProviderType.NOVITA
             elif provider_str.lower() == "replicate":
                 provider_type = ProviderType.REPLICATE
         
@@ -393,6 +395,8 @@ class ToolExecutor:
             step_model = model if model != "auto" else "happyhorse-1.1-t2v"
         elif provider_type == ProviderType.VEO3:
             step_model = model if model != "auto" else "veo3-fast"
+        elif provider_type == ProviderType.NOVITA:
+            step_model = model if model != "auto" else "wan2.7-t2v"
         elif provider_type == ProviderType.REPLICATE:
             step_model = model if model != "auto" else "tencent/hunyuan-video"
         else:
