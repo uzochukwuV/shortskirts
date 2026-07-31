@@ -149,16 +149,26 @@ class NovitaVideoProvider(BaseProvider):
         )
 
     def get_balance(self) -> dict[str, Any]:
-        """Get account balance info."""
+        """Get account balance info.
+        
+        Note: The /v3/user/balance endpoint may not work for all accounts.
+        This is informational only - the provider doesn't require balance checks.
+        """
         client = self._get_client()
         
-        resp = client.get(BALANCE_ENDPOINT)
-        
-        if resp.status_code >= 400:
-            data = resp.json()
-            return {"error": data.get("message", "Failed to get balance")}
-        
-        return resp.json()
+        try:
+            resp = client.get(BALANCE_ENDPOINT)
+            
+            if resp.status_code >= 400:
+                data = resp.json()
+                # Check if it's a fusion model error (common with new accounts)
+                if data.get("reason") == "FUSION_MODEL_NOT_FOUND":
+                    return {"status": "unknown", "message": "Balance API not available"}
+                return {"error": data.get("message", "Failed to get balance")}
+            
+            return resp.json()
+        except Exception as e:
+            return {"status": "unknown", "message": str(e)}
 
     def submit(self, step: Step, config: Any | None = None) -> str:
         """
@@ -377,7 +387,8 @@ class NovitaVideoProvider(BaseProvider):
             
             result = resp.json()
         
-        task_info = result.get("task", {})
+        # Handle both nested and flat response formats
+        task_info = result.get("task", result)  # Fallback to result itself
         status = task_info.get("status", "")
         
         if status == "TASK_STATUS_FAILED":
@@ -390,8 +401,8 @@ class NovitaVideoProvider(BaseProvider):
         if status != "TASK_STATUS_SUCCEED":
             raise ProviderError(f"Novita task not complete: {status}")
         
-        # Get video URL from result
-        videos = task_info.get("videos", [])
+        # Get video URL from result (check both locations)
+        videos = result.get("videos", task_info.get("videos", []))
         
         if not videos:
             raise ProviderError("No video in task result")
@@ -403,9 +414,8 @@ class NovitaVideoProvider(BaseProvider):
         if not video_url:
             raise ProviderError("No video URL in task result")
         
-        # Check for audio
-        audios = task_info.get("audios", [])
-        has_audio = bool(audios)
+        # Check for audio (videos may have audio embedded)
+        has_audio = bool(result.get("audios")) or video_type == "mp4"
         
         # Create asset
         asset = Asset(
@@ -415,7 +425,14 @@ class NovitaVideoProvider(BaseProvider):
         asset.video = VideoMetadata(has_audio=has_audio)
         
         step.assets.append(asset)
-        step.provider_payload = {"novita": {"task_id": task_id, "status": status}}
+        step.provider_payload = {
+            "novita": {
+                "task_id": task_id,
+                "status": status,
+                "task_type": task_info.get("task_type"),
+                "duration": video_data.get("duration"),
+            }
+        }
         
         return step
 
