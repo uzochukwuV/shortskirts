@@ -4,6 +4,32 @@ import ssl
 import re
 from typing import Optional
 
+# Load .env if not already loaded
+def _load_env():
+    if os.environ.get("COCKROACHDB_URL"):
+        return  # Already loaded
+    try:
+        from dotenv import load_dotenv
+        # Try multiple possible locations for .env
+        # Use normpath to resolve .. in paths
+        possible_paths = [
+            os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".env")),
+            os.path.join(os.path.dirname(__file__), ".env"),
+            os.path.join(os.getcwd(), ".env"),
+            os.path.join(os.getcwd(), "..", ".env"),
+            ".env",
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                load_dotenv(path)
+                print(f"[db] Loaded env from {path}")
+                return
+        print(f"[db] Warning: Could not find .env file in any of: {possible_paths}")
+    except Exception as e:
+        print(f"[db] Warning: Could not load .env file: {e}")
+
+_load_env()
+
 _pool: Optional[asyncpg.Pool] = None
 
 
@@ -14,12 +40,19 @@ async def get_pool() -> asyncpg.Pool:
         ssl_ctx = ssl.create_default_context()
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE
+        
+        async def init_connection(conn):
+            # Enable multiple active portals for CockroachDB compatibility
+            await conn.execute("SET multiple_active_portals_enabled = true")
+        
         _pool = await asyncpg.create_pool(
             url,
             ssl=ssl_ctx,
             min_size=2,
             max_size=10,
             command_timeout=60,
+            init=init_connection,
+            statement_cache_size=0,  # Disable statement caching for CockroachDB compatibility
         )
     return _pool
 

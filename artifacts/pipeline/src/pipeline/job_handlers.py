@@ -20,6 +20,7 @@ from pipeline.publishers.media import resolve_publish_media
 from pipeline.publishers.mock import MockPublisher
 from pipeline.publishers.tiktok import TikTokPublisher
 from pipeline.publishers.youtube import YouTubePublisher
+from pipeline.social.token_manager import get_social_token
 from pipeline.social.token_store import decrypt_token
 from pipeline.steps.scene_steps import complete_scene_render_step
 from pipeline.versioning import (
@@ -98,7 +99,8 @@ async def run_publish_target_job(publish_target_id: str, job_id: str, worker_id:
             )
             if not account:
                 raise ValueError("Connected social account not found")
-            access_token = decrypt_token(account.get("token_encrypted"))
+            # Get token (auto-refreshes if expired)
+            access_token = await get_social_token(str(target["social_account_id"]))
         elif target["platform"] != "mock":
             raise ValueError(f"{target['platform']} publishing requires a connected social account")
 

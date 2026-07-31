@@ -18,3 +18,6 @@ aiofiles==24.1.0
 redis==5.0.8
 tenacity==9.0.0
 cryptography==43.0.3
+genblaze-core
+genblaze-openai
+genblaze-s3

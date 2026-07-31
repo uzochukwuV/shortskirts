@@ -27,8 +27,25 @@ async def assemble_episode(
     if not clip_urls:
         raise ValueError("No clips to assemble")
 
-    clip_paths = []
-    tmp_files = []
+    # Track all temp files for cleanup
+    tmp_files: list[str] = []
+
+    def _track_temp(suffix: str = ".mp4") -> str:
+        """Create a tracked temp file."""
+        tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+        path = tmp.name
+        tmp_files.append(path)  # Track immediately
+        return path
+
+    def _cleanup():
+        """Clean up all tracked temp files."""
+        for path in tmp_files:
+            try:
+                if os.path.exists(path):
+                    os.unlink(path)
+            except Exception:
+                pass
+        tmp_files.clear()
 
     try:
         # Download all clips in parallel for faster assembly
@@ -37,20 +54,19 @@ async def assemble_episode(
         ])
 
         # Write downloaded clips to temp files
+        clip_paths: list[str] = []
         for i, data in enumerate(clip_bytes_list):
-            tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-            tmp.write(data)
-            tmp.close()
-            clip_paths.append(tmp.name)
-            tmp_files.append(tmp.name)
+            tmp_path = _track_temp(suffix=".mp4")
+            with open(tmp_path, "wb") as tmp:
+                tmp.write(data)
+            clip_paths.append(tmp_path)
 
-        out_tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-        out_tmp.close()
-        tmp_files.append(out_tmp.name)
+        # Create output temp file
+        out_path = _track_temp(suffix=".mp4")
 
-        await concatenate_video_files(clip_paths, out_tmp.name)
+        await concatenate_video_files(clip_paths, out_path)
 
-        with open(out_tmp.name, "rb") as f:
+        with open(out_path, "rb") as f:
             assembled_bytes = f.read()
 
         key = build_key(story_id, "episodes", episode_id, "assembled.mp4")
@@ -81,8 +97,4 @@ async def assemble_episode(
         return {"assembled_video_url": assembled_url, "manifest_url": manifest_url, "manifest": manifest}
 
     finally:
-        for path in tmp_files:
-            try:
-                os.unlink(path)
-            except Exception:
-                pass
+        _cleanup()

@@ -180,39 +180,50 @@ async def approve_story_checkpoint(story_id: str, checkpoint_id: str, user=Depen
     if checkpoint.get("audio_status") in {"pending", "running"}:
         raise HTTPException(status_code=409, detail="Checkpoint narration audio is still processing")
 
-    await pool.execute(
-        """UPDATE story_generation_checkpoints
-           SET status='approved', approved_at=now(), reviewed_at=now(), updated_at=now()
-           WHERE id=$1""",
-        checkpoint_id,
-    )
-    await pool.execute(
-        "UPDATE stories SET status='generating', updated_at=now() WHERE id=$1",
-        story_id,
-    )
+    # Use transaction to ensure atomicity of checkpoint approval and story status update
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                """UPDATE story_generation_checkpoints
+                   SET status='approved', approved_at=now(), reviewed_at=now(), updated_at=now()
+                   WHERE id=$1""",
+                checkpoint_id,
+            )
+            await conn.execute(
+                "UPDATE stories SET status='generating', updated_at=now() WHERE id=$1",
+                story_id,
+            )
+    
+    # Fetch fresh data after transaction commits
     story_row = await pool.fetchrow("SELECT * FROM stories WHERE id=$1", story_id)
-    if story_row:
-        await record_story_history(
-            pool,
-            story=story_row,
-            event_type="checkpoint_approved_story_resumed",
-            payload={"status": story_row["status"], "checkpoint_id": checkpoint_id},
-        )
-    story = await pool.fetchrow("SELECT * FROM stories WHERE id=$1", story_id)
     checkpoint_row = await pool.fetchrow("SELECT * FROM story_generation_checkpoints WHERE id=$1", checkpoint_id)
-    if story and checkpoint_row:
-        await record_checkpoint_history(
-            pool,
-            story=story,
-            checkpoint=checkpoint_row,
-            event_type="checkpoint_approved",
-            source_job_id=str(checkpoint_row["resume_job_id"]) if checkpoint_row.get("resume_job_id") else None,
-            payload={
-                "status": checkpoint_row["status"],
-                "audio_status": checkpoint_row.get("audio_status"),
-                "approved_at": checkpoint_row.get("approved_at"),
-            },
-        )
+    
+    # Record history (non-critical, failure is acceptable)
+    try:
+        if story_row:
+            await record_story_history(
+                pool,
+                story=story_row,
+                event_type="checkpoint_approved_story_resumed",
+                payload={"status": story_row["status"], "checkpoint_id": checkpoint_id},
+            )
+        if story_row and checkpoint_row:
+            await record_checkpoint_history(
+                pool,
+                story=story_row,
+                checkpoint=checkpoint_row,
+                event_type="checkpoint_approved",
+                source_job_id=str(checkpoint_row["resume_job_id"]) if checkpoint_row.get("resume_job_id") else None,
+                payload={
+                    "status": checkpoint_row["status"],
+                    "audio_status": checkpoint_row.get("audio_status"),
+                    "approved_at": checkpoint_row.get("approved_at"),
+                },
+            )
+    except Exception as e:
+        print(f"[checkpoints] Warning: failed to record checkpoint history: {e}")
+
+    # Enqueue job after successful transaction
     await enqueue_job(str(checkpoint["resume_job_id"]), workload=WORKLOAD_STORY)
     updated = await pool.fetchrow("SELECT * FROM story_generation_checkpoints WHERE id=$1", checkpoint_id)
     return _row_to_checkpoint(updated)

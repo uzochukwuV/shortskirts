@@ -29,7 +29,7 @@ async def generate_narrated_scene_image(
     character_refs: list[str],
     previous_scene_image_url: Optional[str],
     previous_scene_summary: str = "",
-    style: str = "anime",
+    style: str = "",
 ) -> dict:
     scene_number = scene["scene_number"]
     prompt = await build_scene_prompt(

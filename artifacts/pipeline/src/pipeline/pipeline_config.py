@@ -10,6 +10,43 @@ VALID_MEDIA_KINDS = {"auto", "video", "image"}
 VALID_RATIOS = {"16:9", "9:16", "1:1", "4:3", "3:4"}
 
 
+# Feature flags for Agent SDK integration
+# These flags control which new capabilities are enabled
+FEATURE_FLAG_DEFAULTS: dict[str, bool] = {
+    "structured_plans": False,       # Enable structured shot planning
+    "continuity_references": False,  # Enable reference catalog for continuity
+    "dialogue_audio": False,        # Enable dialogue/voice synthesis
+    "timeline_assembly": False,      # Enable AI-powered timeline assembly
+    "agent_chat": False,            # Enable conversational agent interface
+    "parallel_generation": True,     # Enable parallel scene generation (BUG-7 fix)
+    "use_genblaze": False,          # Use GenBlaze SDK instead of legacy providers
+}
+
+
+# GenBlaze provider mappings
+# Maps Dysentry provider names to GenBlaze models
+GENBLaze_VIDEO_MODELS = {
+    "dashscope": "Kling-Text2Video-V2.1-Master",
+    "aiml": "Kling-Text2Video-V2.1-Master",
+    "sora": "sora-2",
+    "veo": "veo3",
+    "kling": "Kling-Text2Video-V2.1-Master",
+    "wan": "wan2.6-t2v",
+    "cosmos": "cosmos-2.0",
+    "runway": "gen4_turbo",
+    "luma": "ray-2",
+}
+
+GENBLaze_IMAGE_MODELS = {
+    "qwen-image-edit-plus": "seedream-5.0-lite",
+    "qwen-image-plus": "seedream-5.0-lite",
+    "dall-e": "dall-e-3",
+    "imagen": "imagen-3.0",
+    "flux": "flux-schnell",
+    "seedream": "seedream-5.0-lite",
+}
+
+
 DEFAULT_PIPELINE_CONFIG: dict[str, Any] = {
     "media": {
         "kind": "auto",
@@ -32,6 +69,7 @@ DEFAULT_PIPELINE_CONFIG: dict[str, Any] = {
         "use_previous_exit_frame": True,
         "max_reference_images": 8,
     },
+    "feature_flags": FEATURE_FLAG_DEFAULTS.copy(),
 }
 
 
@@ -134,3 +172,120 @@ def workflow_state_with_pipeline_config(
     state["requested_video_ratio"] = pipeline_config["media"]["ratio"]
     state.setdefault("frame_ratio", pipeline_config["media"]["ratio"])
     return state
+
+
+# Feature flag helpers for Agent SDK integration
+
+def get_feature_flags(
+    workflow_state: dict[str, Any] | str | None = None,
+    pipeline_config: dict[str, Any] | None = None,
+) -> dict[str, bool]:
+    """Get feature flags from workflow_state or pipeline_config with defaults applied."""
+    flags = FEATURE_FLAG_DEFAULTS.copy()
+    
+    if pipeline_config:
+        config_flags = _safe_dict(pipeline_config).get("feature_flags", {})
+        flags.update(config_flags)
+    
+    if workflow_state:
+        state = _safe_dict(workflow_state)
+        if "feature_flags" in state:
+            flags.update(state["feature_flags"])
+        elif "pipeline_config" in state:
+            config_flags = _safe_dict(state["pipeline_config"]).get("feature_flags", {})
+            flags.update(config_flags)
+    
+    return flags
+
+
+def is_feature_enabled(
+    flag_name: str,
+    workflow_state: dict[str, Any] | str | None = None,
+    pipeline_config: dict[str, Any] | None = None,
+) -> bool:
+    """Check if a specific feature flag is enabled."""
+    flags = get_feature_flags(workflow_state, pipeline_config)
+    return bool(flags.get(flag_name, False))
+
+
+def get_enabled_features(
+    workflow_state: dict[str, Any] | str | None = None,
+    pipeline_config: dict[str, Any] | None = None,
+) -> list[str]:
+    """Get list of enabled feature flag names."""
+    flags = get_feature_flags(workflow_state, pipeline_config)
+    return [name for name, enabled in flags.items() if enabled]
+
+
+def update_feature_flags(
+    workflow_state: dict[str, Any] | str | None,
+    updates: dict[str, bool],
+) -> dict[str, Any]:
+    """Update feature flags in workflow_state, preserving other state."""
+    state = _safe_dict(workflow_state)
+    
+    if "feature_flags" not in state:
+        state["feature_flags"] = FEATURE_FLAG_DEFAULTS.copy()
+    
+    state["feature_flags"].update(updates)
+    
+    # Also update pipeline_config if present
+    if "pipeline_config" in state:
+        state["pipeline_config"]["feature_flags"] = state["feature_flags"]
+    
+    return state
+
+
+# GenBlaze helper functions
+
+def get_genblaze_video_model(provider_name: str) -> str | None:
+    """Get the GenBlaze video model for a given provider name."""
+    return GENBLaze_VIDEO_MODELS.get(provider_name.lower())
+
+
+def get_genblaze_image_model(provider_name: str) -> str | None:
+    """Get the GenBlaze image model for a given provider name."""
+    return GENBLaze_IMAGE_MODELS.get(provider_name.lower())
+
+
+def should_use_genblaze(
+    workflow_state: dict[str, Any] | str | None = None,
+    pipeline_config: dict[str, Any] | None = None,
+) -> bool:
+    """Check if GenBlaze SDK should be used for generation."""
+    return is_feature_enabled("use_genblaze", workflow_state, pipeline_config)
+
+
+def get_genblaze_preferred_model(
+    pipeline_config: dict[str, Any] | None = None,
+    modality: str = "video",
+) -> str | None:
+    """Get the preferred GenBlaze model from pipeline config.
+    
+    Args:
+        pipeline_config: Pipeline configuration
+        modality: Either "video" or "image"
+    
+    Returns:
+        GenBlaze model name or None
+    """
+    if not pipeline_config:
+        return None
+    
+    providers = pipeline_config.get("providers", {})
+    if modality == "video":
+        pref_list = providers.get("video_preference", [])
+    else:
+        pref_list = providers.get("image_preference", [])
+    
+    if not pref_list:
+        return None
+    
+    # Try each provider in order
+    model_map = GENBLaze_VIDEO_MODELS if modality == "video" else GENBLaze_IMAGE_MODELS
+    for provider in pref_list:
+        model = model_map.get(provider.lower())
+        if model:
+            return model
+    
+    return None

@@ -59,6 +59,7 @@ async def _run_ffmpeg(args: list[str], *, timeout: int = 300) -> subprocess.Comp
 
 
 async def extract_last_frame_jpeg(video_bytes: bytes) -> bytes:
+    """Extract last frame as JPEG (legacy - prefer PNG for better quality)."""
     with tempfile.TemporaryDirectory() as tmpdir:
         input_path = Path(tmpdir) / "input.mp4"
         output_path = Path(tmpdir) / "exit.jpg"
@@ -103,6 +104,104 @@ async def extract_last_frame_jpeg(video_bytes: bytes) -> bytes:
 
         if not output_path.exists() or output_path.stat().st_size == 0:
             raise MediaToolError("ffmpeg did not produce an exit frame")
+        return output_path.read_bytes()
+
+
+async def extract_last_frame_png(video_bytes: bytes) -> bytes:
+    """Extract last frame as PNG for higher quality (less compression artifacts).
+    
+    PNG preserves more detail than JPEG, which is important for:
+    - Exit frames used as I2V/R2V references
+    - Character consistency across scenes
+    - Lighting and color accuracy
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_path = Path(tmpdir) / "input.mp4"
+        output_path = Path(tmpdir) / "exit.png"
+        input_path.write_bytes(video_bytes)
+
+        try:
+            await _run_ffmpeg(
+                [
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-sseof",
+                    "-0.2",
+                    "-i",
+                    str(input_path),
+                    "-frames:v",
+                    "1",
+                    "-c:v",
+                    "png",
+                    "-compression_level",
+                    "6",  # Balance between size and quality
+                    str(output_path),
+                ],
+                timeout=90,
+            )
+        except Exception:
+            # Fallback: extract last frame from end of video
+            await _run_ffmpeg(
+                [
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-i",
+                    str(input_path),
+                    "-frames:v",
+                    "1",
+                    "-c:v",
+                    "png",
+                    "-compression_level",
+                    "6",
+                    str(output_path),
+                ],
+                timeout=90,
+            )
+
+        if not output_path.exists() or output_path.stat().st_size == 0:
+            raise MediaToolError("ffmpeg did not produce an exit frame PNG")
+        return output_path.read_bytes()
+
+
+async def extract_middle_frame_png(video_bytes: bytes) -> bytes:
+    """Extract middle frame as PNG for scene reference images."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_path = Path(tmpdir) / "input.mp4"
+        output_path = Path(tmpdir) / "middle.png"
+        input_path.write_bytes(video_bytes)
+        
+        # Use filter to get middle frame
+        try:
+            await _run_ffmpeg(
+                [
+                    "-hide_banner",
+                    "-loglevel", 
+                    "error",
+                    "-y",
+                    "-i",
+                    str(input_path),
+                    "-vf",
+                    "select='eq(n\,floor(N/2))'",
+                    "-frames:v",
+                    "1",
+                    "-c:v",
+                    "png",
+                    "-compression_level",
+                    "6",
+                    str(output_path),
+                ],
+                timeout=90,
+            )
+        except Exception:
+            # Fallback to last frame
+            return await extract_last_frame_png(video_bytes)
+
+        if not output_path.exists() or output_path.stat().st_size == 0:
+            raise MediaToolError("ffmpeg did not produce a middle frame PNG")
         return output_path.read_bytes()
 
 

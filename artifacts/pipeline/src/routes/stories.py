@@ -4,10 +4,7 @@ from db.connection import get_pool
 from models.story import (
     StoryAssistantRequest,
     StoryAssistantResponse,
-    StoryCapabilitiesResponse,
     StoryCreate,
-    StoryOperationsAgentRequest,
-    StoryOperationsAgentResponse,
     StoryPipelineConfigUpdate,
     StoryResponse,
     StoryUpdate,
@@ -19,7 +16,6 @@ from job_queue import enqueue_job, WORKLOAD_MEDIA, WORKLOAD_STORY
 from pipeline.runtime_context import job_context
 from pipeline.history import record_story_history
 from pipeline.pipeline_config import normalize_pipeline_config, workflow_state_with_pipeline_config
-from pipeline.operations_agent import build_story_capabilities, plan_operation
 from auth import get_current_user, user_id
 
 router = APIRouter(prefix="/pipeline/stories", tags=["stories"])
@@ -261,42 +257,50 @@ async def _regenerate_outline(pool, story_row, owner_id: str):
             reference_context=workflow_state,
         )
 
-    updated = await pool.fetchrow(
-        """UPDATE stories
-           SET status='draft',
-               approval_status='pending_approval',
-               approved_at=NULL,
-               episode_plan=$2::jsonb,
-               updated_at=now()
-           WHERE id=$1 AND owner_id=$3
-           RETURNING *""",
-        str(story_row["id"]),
-        json.dumps(plan),
-        owner_id,
-    )
-    if not updated:
-        raise HTTPException(status_code=404, detail="Story not found")
+    # Use transaction to ensure atomicity of story update and episode inserts
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            updated = await conn.fetchrow(
+                """UPDATE stories
+                   SET status='draft',
+                       approval_status='pending_approval',
+                       approved_at=NULL,
+                       episode_plan=$2::jsonb,
+                       updated_at=now()
+                   WHERE id=$1 AND owner_id=$3
+                   RETURNING *""",
+                str(story_row["id"]),
+                json.dumps(plan),
+                owner_id,
+            )
+            if not updated:
+                raise HTTPException(status_code=404, detail="Story not found")
 
-    for ep in plan.get("episodes", []):
-        await pool.execute(
-            """INSERT INTO episodes (story_id, episode_number, title, status)
-               VALUES ($1,$2,$3,'pending')
-               ON CONFLICT (story_id, episode_number)
-               DO UPDATE SET title=EXCLUDED.title, updated_at=now()""",
-            str(updated["id"]),
-            ep["episode_number"],
-            ep.get("title", f"Episode {ep['episode_number']}"),
+            for ep in plan.get("episodes", []):
+                await conn.execute(
+                    """INSERT INTO episodes (story_id, episode_number, title, status)
+                       VALUES ($1,$2,$3,'pending')
+                       ON CONFLICT (story_id, episode_number)
+                       DO UPDATE SET title=EXCLUDED.title, updated_at=now()""",
+                    str(updated["id"]),
+                    ep["episode_number"],
+                    ep.get("title", f"Episode {ep['episode_number']}"),
+                )
+
+    # Record history after transaction commits (non-critical)
+    try:
+        await record_story_history(
+            pool,
+            story=updated,
+            event_type="outline_regenerated",
+            payload={
+                "status": updated["status"],
+                "approval_status": updated.get("approval_status"),
+            },
         )
-
-    await record_story_history(
-        pool,
-        story=updated,
-        event_type="outline_regenerated",
-        payload={
-            "status": updated["status"],
-            "approval_status": updated.get("approval_status"),
-        },
-    )
+    except Exception as e:
+        print(f"[stories] Warning: failed to record outline regeneration history: {e}")
+    
     return updated, plan
 
 
@@ -349,100 +353,101 @@ async def create_story(body: StoryCreate, user=Depends(get_current_user)):
             reference_context=workflow_state,
         )
 
-    row = await pool.fetchrow(
-        """INSERT INTO stories
-           (owner_id, title, prompt, genre, style, num_episodes, num_scenes, status,
-            workflow_type, workflow_version, generation_version, workflow_state,
-            approval_status, episode_plan)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,'v1','v1',$9::jsonb,'pending_approval',$10::jsonb)
-           RETURNING *""",
-        owner_id,
-        body.title,
-        body.prompt,
-        body.genre,
-        body.style,
-        body.num_episodes,
-        body.num_scenes,
-        body.workflow_type.value,
-        json.dumps(workflow_state),
-        json.dumps(plan),
-    )
-    story_id = str(row["id"])
-    await record_story_history(
-        pool,
-        story=row,
-        event_type="story_created",
-        payload={
-            "title": row["title"],
-            "status": row["status"],
-            "approval_status": row.get("approval_status"),
-            "workflow_type": row.get("workflow_type"),
-        },
-    )
+    # Use transaction to ensure atomicity of all database operations
+    # NOTE: CockroachDB + asyncpg requires avoiding RETURNING inside transactions
+    # when multiple operations follow. We use execute + separate fetch instead.
+    async with pool.acquire() as conn:
+        # Insert story without RETURNING
+        await conn.execute(
+            """INSERT INTO stories
+               (owner_id, title, prompt, genre, style, num_episodes, num_scenes, status,
+                workflow_type, workflow_version, generation_version, workflow_state,
+                approval_status, episode_plan)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,'v1','v1',$9::jsonb,'pending_approval',$10::jsonb)""",
+            owner_id,
+            body.title,
+            body.prompt,
+            body.genre,
+            body.style,
+            body.num_episodes,
+            body.num_scenes,
+            body.workflow_type.value,
+            json.dumps(workflow_state),
+            json.dumps(plan),
+        )
+        
+        # Get the story ID by selecting the most recent one for this owner
+        row = await conn.fetchrow(
+            "SELECT * FROM stories WHERE owner_id=$1 ORDER BY created_at DESC LIMIT 1",
+            owner_id,
+        )
+        story_id = str(row["id"])
 
-    if body.bible_ids:
-        for bid in body.bible_ids:
-            await pool.execute(
-                """UPDATE bibles SET story_id=$1, updated_at=now()
-                   WHERE id=$2 AND story_id IS NULL AND owner_id=$3""",
+        if body.bible_ids:
+            for bid in body.bible_ids:
+                await conn.execute(
+                    """UPDATE bibles SET story_id=$1, updated_at=now()
+                       WHERE id=$2 AND story_id IS NULL AND owner_id=$3""",
+                    story_id,
+                    bid,
+                    owner_id,
+                )
+
+        # Insert characters (outside main transaction to avoid prepared statement conflicts)
+        # The story is already created, so we can do this in a separate transaction
+        plan_characters = plan.get("characters", [])
+        if plan_characters:
+            # Insert characters one by one without RETURNING
+            refs = workflow_state["character_reference_urls"] or workflow_state["style_reference_urls"] or []
+            refs_json = json.dumps([u for u in refs if u])
+            for char in plan_characters:
+                name = char.get("name", "").strip()
+                if not name:
+                    continue
+                await conn.execute(
+                    """INSERT INTO characters
+                       (story_id, name, description, role, personality, appearance, ref_image_urls)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
+                       ON CONFLICT (story_id, name) DO NOTHING""",
+                    story_id,
+                    name,
+                    char.get("description", ""),
+                    char.get("role", "main"),
+                    char.get("personality", ""),
+                    char.get("appearance", ""),
+                    refs_json,
+                )
+
+        for ep in plan.get("episodes", []):
+            await conn.execute(
+                """INSERT INTO episodes (story_id, episode_number, title, status)
+                   VALUES ($1,$2,$3,'pending')
+                   ON CONFLICT (story_id, episode_number) DO NOTHING""",
                 story_id,
-                bid,
-                owner_id,
+                ep["episode_number"],
+                ep.get("title", f"Episode {ep['episode_number']}"),
             )
 
-    plan_characters = plan.get("characters", [])
-    if plan_characters:
-        await _insert_plan_characters(
+    # History recording outside transaction (after commit) - failure here is non-critical
+    try:
+        await record_story_history(
             pool,
-            story_id,
-            plan_characters,
-            seed_ref_urls=workflow_state["character_reference_urls"] or workflow_state["style_reference_urls"],
+            story=row,
+            event_type="story_created",
+            payload={
+                "title": row["title"],
+                "status": row["status"],
+                "approval_status": row.get("approval_status"),
+                "workflow_type": row.get("workflow_type"),
+            },
         )
-
-    for ep in plan.get("episodes", []):
-        await pool.execute(
-            """INSERT INTO episodes (story_id, episode_number, title, status)
-               VALUES ($1,$2,$3,'pending')
-               ON CONFLICT (story_id, episode_number) DO NOTHING""",
-            story_id,
-            ep["episode_number"],
-            ep.get("title", f"Episode {ep['episode_number']}"),
-        )
+    except Exception as e:
+        print(f"[stories] Warning: failed to record story history: {e}")
 
     plan_data = row["episode_plan"]
     if isinstance(plan_data, str):
         plan_data = json.loads(plan_data)
     return _build_story_response(row, plan_data)
-
-
-async def _insert_plan_characters(pool, story_id: str, characters: list[dict], seed_ref_urls: list[str] | None = None):
-    inserted = 0
-    skipped = 0
-    refs = [u for u in (seed_ref_urls or []) if u]
-    for char in characters:
-        name = char.get("name", "").strip()
-        if not name:
-            skipped += 1
-            continue
-        row = await pool.fetchrow(
-            """INSERT INTO characters
-               (story_id, name, description, role, personality, appearance, ref_image_urls)
-               VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
-               ON CONFLICT (story_id, name) DO NOTHING
-               RETURNING id""",
-            story_id,
-            name,
-            char.get("description", ""),
-            char.get("role", "main"),
-            char.get("personality", ""),
-            char.get("appearance", ""),
-            json.dumps(refs),
-        )
-        if row:
-            inserted += 1
-        else:
-            skipped += 1
-    print(f"[stories] Materialised {inserted} characters for story {story_id}; skipped {skipped}")
 
 
 @router.get("", response_model=list[StoryResponse])
@@ -642,41 +647,6 @@ async def story_assistant(
     )
 
 
-@router.get("/{story_id}/capabilities", response_model=StoryCapabilitiesResponse)
-async def get_story_capabilities(
-    story_id: str,
-    scene_id: str | None = None,
-    user=Depends(get_current_user),
-):
-    pool = await get_pool()
-    owner_id = user_id(user)
-    story_row = await _load_story_row(pool, story_id, owner_id)
-    if not story_row:
-        raise HTTPException(status_code=404, detail="Story not found")
-
-    selected_scene = None
-    if scene_id:
-        selected_scene = await _load_story_scene(pool, story_id, owner_id, scene_id)
-        if not selected_scene:
-            raise HTTPException(status_code=404, detail="Scene not found")
-
-    selected_checkpoint = await _load_story_checkpoint(pool, story_id, owner_id)
-    active_job = await _load_story_job(pool, story_id)
-    capabilities = build_story_capabilities(
-        story=dict(story_row),
-        selected_scene=dict(selected_scene) if selected_scene else None,
-        selected_checkpoint=dict(selected_checkpoint) if selected_checkpoint else None,
-        active_job=dict(active_job) if active_job else None,
-    )
-    return StoryCapabilitiesResponse(
-        story_id=story_id,
-        story_status=story_row["status"],
-        selected_scene_id=str(selected_scene["id"]) if selected_scene else None,
-        selected_checkpoint_id=str(selected_checkpoint["id"]) if selected_checkpoint else None,
-        **capabilities,
-    )
-
-
 @router.post("/{story_id}/regenerate-outline", response_model=StoryResponse)
 async def regenerate_outline(story_id: str, user=Depends(get_current_user)):
     pool = await get_pool()
@@ -688,257 +658,6 @@ async def regenerate_outline(story_id: str, user=Depends(get_current_user)):
     return _build_story_response(updated, plan)
 
 
-@router.post("/{story_id}/operations-agent", response_model=StoryOperationsAgentResponse)
-async def story_operations_agent(
-    story_id: str,
-    body: StoryOperationsAgentRequest,
-    user=Depends(get_current_user),
-):
-    pool = await get_pool()
-    owner_id = user_id(user)
-    story_row = await _load_story_row(pool, story_id, owner_id)
-    if not story_row:
-        raise HTTPException(status_code=404, detail="Story not found")
-
-    plan_data = story_row["episode_plan"]
-    if isinstance(plan_data, str):
-        try:
-            plan_data = json.loads(plan_data)
-        except Exception:
-            plan_data = {}
-    story_payload = _story_payload(story_row, plan_data or {})
-
-    selected_scene = None
-    if body.scene_id:
-        selected_scene = await _load_story_scene(pool, story_id, owner_id, body.scene_id)
-        if not selected_scene:
-            raise HTTPException(status_code=404, detail="Scene not found")
-
-    selected_checkpoint = await _load_story_checkpoint(pool, story_id, owner_id)
-    active_job = await _load_story_job(pool, story_id)
-    operation_plan = await plan_operation(
-        story=story_payload,
-        selected_scene=dict(selected_scene) if selected_scene else None,
-        selected_checkpoint=dict(selected_checkpoint) if selected_checkpoint else None,
-        active_job=dict(active_job) if active_job else None,
-        instruction=body.instruction,
-    )
-
-    if not body.execute:
-        return StoryOperationsAgentResponse(
-            executed=False,
-            reason=None if operation_plan["allowed"] else operation_plan["message"],
-            **{k: v for k, v in operation_plan.items() if k != "capabilities"},
-        )
-
-    if not operation_plan["allowed"]:
-        return StoryOperationsAgentResponse(
-            executed=False,
-            reason=operation_plan["message"],
-            **{k: v for k, v in operation_plan.items() if k != "capabilities"},
-        )
-
-    operation = operation_plan["operation"]
-    result: dict[str, str] = {}
-    executed = False
-    reason = None
-
-    if operation == "edit_story":
-        patch = operation_plan["story_patch"] or {}
-        current_plan = dict(plan_data or {})
-        if "synopsis" in patch:
-            current_plan["synopsis"] = patch["synopsis"]
-        if "setting" in patch:
-            current_plan["setting"] = patch["setting"]
-        if "themes" in patch:
-            current_plan["themes"] = [theme for theme in (patch["themes"] or []) if theme]
-        updated = await pool.fetchrow(
-            """UPDATE stories
-               SET title=COALESCE($2, title),
-                   prompt=COALESCE($3, prompt),
-                   genre=COALESCE($4, genre),
-                   style=COALESCE($5, style),
-                   episode_plan=$6::jsonb,
-                   updated_at=now()
-               WHERE id=$1 AND owner_id=$7
-               RETURNING *""",
-            story_id,
-            patch.get("title"),
-            patch.get("prompt"),
-            patch.get("genre"),
-            patch.get("style"),
-            json.dumps(current_plan),
-            owner_id,
-        )
-        if updated:
-            await record_story_history(
-                pool,
-                story=updated,
-                event_type="story_updated_by_operations_agent",
-                payload={"instruction": body.instruction, "story_patch": patch},
-            )
-            executed = True
-            result = {"story_id": story_id}
-    elif operation == "edit_scene" and selected_scene:
-        patch = operation_plan["scene_patch"] or {}
-        metadata = selected_scene.get("generation_metadata")
-        if isinstance(metadata, str):
-            try:
-                metadata = json.loads(metadata)
-            except Exception:
-                metadata = {}
-        metadata = metadata or {}
-        for key in ("title", "description", "visual_prompt", "mood", "location", "action", "narration"):
-            if key in patch:
-                metadata[key] = patch[key]
-        updated_scene = await pool.fetchrow(
-            """UPDATE scenes
-               SET prompt=COALESCE($2, prompt),
-                   generation_metadata=$3::jsonb,
-                   updated_at=now()
-               WHERE id=$1
-               RETURNING *""",
-            str(selected_scene["id"]),
-            patch.get("prompt"),
-            json.dumps(metadata),
-        )
-        if updated_scene:
-            await record_story_history(
-                pool,
-                story=story_row,
-                event_type="scene_updated_by_operations_agent",
-                payload={"instruction": body.instruction, "scene_id": str(selected_scene["id"])},
-            )
-            executed = True
-            result = {"scene_id": str(selected_scene["id"])}
-    elif operation == "approve_outline":
-        updated = await pool.fetchrow(
-            """UPDATE stories
-               SET status='approved', approval_status='approved', approved_at=now(), updated_at=now()
-               WHERE id=$1 AND owner_id=$2 AND status='draft'
-               RETURNING *""",
-            story_id,
-            owner_id,
-        )
-        if updated:
-            await record_story_history(
-                pool,
-                story=updated,
-                event_type="outline_approved_by_operations_agent",
-                payload={"instruction": body.instruction},
-            )
-            executed = True
-            result = {"story_id": story_id}
-    elif operation == "regenerate_outline":
-        updated, _ = await _regenerate_outline(pool, story_row, owner_id)
-        executed = True
-        result = {"story_id": str(updated["id"])}
-    elif operation == "start_generation":
-        if story_row["status"] in {"generating", "checkpoint_review"}:
-            reason = "Generation already in progress"
-        elif story_row["status"] == "draft":
-            reason = "Outline must be approved before generation"
-        else:
-            job_row = await pool.fetchrow(
-                """INSERT INTO generation_jobs
-                   (entity_type, entity_id, status, total_steps, current_step, job_type)
-                   VALUES ('story',$1,'pending',0,'Queued','full_episode')
-                   RETURNING *""",
-                story_id,
-            )
-            await enqueue_job(str(job_row["id"]), workload=WORKLOAD_STORY)
-            await pool.execute(
-                "UPDATE stories SET status='generating', updated_at=now() WHERE id=$1",
-                story_id,
-            )
-            executed = True
-            result = {"story_id": story_id, "job_id": str(job_row["id"])}
-    elif operation == "regenerate_scene" and selected_scene:
-        job_row = await pool.fetchrow(
-            """INSERT INTO generation_jobs
-               (entity_type, entity_id, status, total_steps, current_step, job_type)
-               VALUES ('scene', $1, 'pending', 1, 'Queued', 'scene_regen')
-               RETURNING *""",
-            str(selected_scene["id"]),
-        )
-        await enqueue_job(str(job_row["id"]), workload=WORKLOAD_MEDIA)
-        await pool.execute(
-            "UPDATE scenes SET status='running', updated_at=now() WHERE id=$1",
-            str(selected_scene["id"]),
-        )
-        executed = True
-        result = {"scene_id": str(selected_scene["id"]), "job_id": str(job_row["id"])}
-    elif operation == "approve_checkpoint" and selected_checkpoint:
-        if selected_checkpoint.get("status") == "approved":
-            executed = True
-            result = {"checkpoint_id": str(selected_checkpoint["id"])}
-        elif not selected_checkpoint.get("resume_job_id"):
-            reason = "Checkpoint does not have a pending resume job"
-        elif selected_checkpoint.get("audio_status") in {"pending", "running"}:
-            reason = "Checkpoint narration audio is still processing"
-        else:
-            await pool.execute(
-                """UPDATE story_generation_checkpoints
-                   SET status='approved', approved_at=now(), reviewed_at=now(), updated_at=now()
-                   WHERE id=$1""",
-                str(selected_checkpoint["id"]),
-            )
-            await pool.execute(
-                "UPDATE stories SET status='generating', updated_at=now() WHERE id=$1",
-                story_id,
-            )
-            await enqueue_job(str(selected_checkpoint["resume_job_id"]), workload=WORKLOAD_STORY)
-            executed = True
-            result = {
-                "checkpoint_id": str(selected_checkpoint["id"]),
-                "job_id": str(selected_checkpoint["resume_job_id"]),
-            }
-    elif operation == "cancel_run" and active_job:
-        updated_job = await pool.fetchrow(
-            """UPDATE generation_jobs
-               SET status='canceled',
-                   error='Canceled by operations agent',
-                   completed_at=COALESCE(completed_at, now()),
-                   worker_id=NULL,
-                   lease_expires_at=NULL,
-                   updated_at=now()
-               WHERE id=$1
-               RETURNING *""",
-            str(active_job["id"]),
-        )
-        if updated_job:
-            executed = True
-            result = {"job_id": str(updated_job["id"])}
-    elif operation == "retry_failed_step" and active_job:
-        updated_job = await pool.fetchrow(
-            """UPDATE generation_jobs
-               SET status='pending',
-                   error=NULL,
-                   completed_at=NULL,
-                   worker_id=NULL,
-                   leased_at=NULL,
-                   lease_expires_at=NULL,
-                   last_heartbeat_at=now(),
-                   current_step='Retry queued',
-                   updated_at=now()
-               WHERE id=$1
-               RETURNING *""",
-            str(active_job["id"]),
-        )
-        if updated_job:
-            await enqueue_job(str(updated_job["id"]), workload=WORKLOAD_STORY)
-            executed = True
-            result = {"job_id": str(updated_job["id"])}
-
-    if not executed and reason is None:
-        reason = "The selected operation could not be executed"
-
-    return StoryOperationsAgentResponse(
-        executed=executed,
-        reason=reason,
-        result=result,
-        **{k: v for k, v in operation_plan.items() if k != "capabilities"},
-    )
 
 
 @router.put("/{story_id}/pipeline-config", response_model=StoryResponse)
@@ -1022,21 +741,38 @@ async def generate_story(
     user=Depends(get_current_user),
 ):
     pool = await get_pool()
-    story = await pool.fetchrow(
-        "SELECT * FROM stories WHERE id=$1 AND owner_id=$2",
+    
+    # Use atomic conditional UPDATE to prevent race conditions
+    # Only update if story exists and status is NOT 'generating' or 'checkpoint_review'
+    updated_story = await pool.fetchrow(
+        """UPDATE stories 
+           SET status='generating', updated_at=now() 
+           WHERE id=$1 AND owner_id=$2 
+           AND status NOT IN ('generating', 'checkpoint_review')
+           RETURNING *""",
         story_id,
         user_id(user),
     )
-    if not story:
-        raise HTTPException(status_code=404, detail="Story not found")
-    if story["status"] in {"generating", "checkpoint_review"}:
-        raise HTTPException(status_code=409, detail="Generation already in progress")
-    if story["status"] == "draft":
-        raise HTTPException(
-            status_code=400,
-            detail="Outline must be approved before generation. Call PUT /approve-outline first.",
+    
+    if not updated_story:
+        # Check why it wasn't updated to give proper error message
+        existing_story = await pool.fetchrow(
+            "SELECT * FROM stories WHERE id=$1 AND owner_id=$2",
+            story_id,
+            user_id(user),
         )
+        if not existing_story:
+            raise HTTPException(status_code=404, detail="Story not found")
+        if existing_story["status"] in {"generating", "checkpoint_review"}:
+            raise HTTPException(status_code=409, detail="Generation already in progress")
+        if existing_story["status"] == "draft":
+            raise HTTPException(
+                status_code=400,
+                detail="Outline must be approved before generation. Call PUT /approve-outline first.",
+            )
+        raise HTTPException(status_code=409, detail="Cannot start generation")
 
+    # Create job after successfully updating story status
     job_row = await pool.fetchrow(
         """INSERT INTO generation_jobs
            (entity_type, entity_id, status, total_steps, current_step, job_type)
@@ -1046,10 +782,6 @@ async def generate_story(
     )
     job_id = str(job_row["id"])
     await enqueue_job(job_id, workload=WORKLOAD_STORY)
-    await pool.execute(
-        "UPDATE stories SET status='generating', updated_at=now() WHERE id=$1",
-        story_id,
-    )
 
     return GenerationJobResponse(
         id=job_id,

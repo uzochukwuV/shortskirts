@@ -130,15 +130,31 @@ async def update_schedule(schedule_id: str, body: ScheduleUpdate, user=Depends(g
         await _assert_story_owner(pool, user_id(user), values.get("story_id"))
     if not values:
         return _schedule_response(existing)
+    
+    # Whitelist allowed fields to prevent SQL injection
+    ALLOWED_FIELDS = {
+        "name", "story_id", "schedule_type", "cadence", "cadence_config",
+        "timezone", "next_run_at", "enabled", "pipeline_config", 
+        "publish_config", "approval_policy", "status"
+    }
+    JSONB_FIELDS = {"cadence_config", "pipeline_config", "publish_config"}
+    
     fields = []
     params = []
     for index, (key, value) in enumerate(values.items(), start=1):
-        if key in {"cadence_config", "pipeline_config", "publish_config"}:
+        # Only allow whitelisted fields to prevent SQL injection
+        if key not in ALLOWED_FIELDS:
+            continue
+        if key in JSONB_FIELDS:
             fields.append(f"{key}=${index}::jsonb")
             params.append(json.dumps(value or {}))
         else:
             fields.append(f"{key}=${index}")
             params.append(value)
+    
+    if not fields:
+        return _schedule_response(existing)
+    
     params.extend([schedule_id, user_id(user)])
     row = await pool.fetchrow(
         f"""UPDATE automation_schedules

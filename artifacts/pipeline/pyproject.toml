@@ -1,0 +1,8 @@
+[project]
+name = "pipeline"
+version = "0.1.0"
+description = "Dysentry Video Production Pipeline"
+requires-python = ">=3.12"
+dependencies = [
+    "openhands-sdk>=0.2.0",
+]

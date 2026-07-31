@@ -25,7 +25,7 @@ async def generate_character_references(
     story_id: str,
     character_id: str,
     character: dict,
-    style: str = "anime",
+    style: str = "",
     num_refs: int = 3,
 ) -> list[str]:
     angles = ["front view portrait", "3/4 view portrait", "side profile"][:num_refs]

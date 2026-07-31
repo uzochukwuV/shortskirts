@@ -1,4 +1,5 @@
 import os
+import asyncio
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
@@ -25,13 +26,22 @@ from routes.pipeline_runs import router as pipeline_runs_router
 from routes.publish    import router as publish_router
 from routes.schedules  import router as schedules_router
 from routes.social     import router as social_router
+from routes.stream     import router as stream_router
+from routes.chat       import router as chat_router
 from auth              import router as auth_router
 from pipeline.media_tools import ffmpeg_available, ffmpeg_path
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db()
+    # Initialize database with timeout to prevent hanging
+    try:
+        await asyncio.wait_for(init_db(), timeout=30.0)
+        print("[startup] Database initialized successfully")
+    except asyncio.TimeoutError:
+        print("[startup] WARNING: Database initialization timed out, continuing anyway")
+    except Exception as e:
+        print(f"[startup] WARNING: Database initialization failed: {e}, continuing anyway")
     yield
     await close_pool()
 
@@ -68,6 +78,8 @@ app.include_router(pipeline_runs_router)
 app.include_router(social_router)
 app.include_router(publish_router)
 app.include_router(schedules_router)
+app.include_router(stream_router)
+app.include_router(chat_router)
 
 
 @app.get("/pipeline/health")
