@@ -1,4 +1,5 @@
 -- Assets table migration for unified agent system
+-- CockroachDB-compatible migration
 -- Run this migration to add asset management to the database
 
 -- ══════════════════════════════════════════════════════════════════════════════
@@ -27,29 +28,30 @@ CREATE TABLE IF NOT EXISTS assets (
     
     -- Versioning
     version INT DEFAULT 1,      -- Asset version
-    parent_asset_id UUID REFERENCES assets(id),  -- For derived assets
+    parent_asset_id UUID,       -- For derived assets (FK added after table exists)
     
     -- Organization
-    tags TEXT[] DEFAULT '{}',   -- Searchable tags
+    tags JSONB DEFAULT '[]',    -- Searchable tags (CockroachDB uses JSONB)
     metadata JSONB DEFAULT '{}', -- Additional metadata
     
     -- Timestamps
     created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now(),
-    
-    -- Constraints
-    CONSTRAINT valid_asset_type CHECK (asset_type IN ('video', 'image', 'audio', 'document'))
+    updated_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- Add FK constraint separately for CockroachDB compatibility
+ALTER TABLE assets ADD CONSTRAINT fk_assets_parent 
+    FOREIGN KEY (parent_asset_id) REFERENCES assets(id) ON DELETE CASCADE;
 
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_assets_story_id ON assets(story_id);
 CREATE INDEX IF NOT EXISTS idx_assets_entity ON assets(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_assets_type ON assets(asset_type);
-CREATE INDEX IF NOT EXISTS idx_assets_tags ON assets USING GIN(tags);
 CREATE INDEX IF NOT EXISTS idx_assets_parent ON assets(parent_asset_id);
 CREATE INDEX IF NOT EXISTS idx_assets_created ON assets(created_at DESC);
 
 -- Full-text search on metadata
+CREATE INDEX IF NOT EXISTS idx_assets_tags ON assets USING GIN(tags);
 CREATE INDEX IF NOT EXISTS idx_assets_metadata ON assets USING GIN(metadata);
 
 
@@ -60,8 +62,8 @@ CREATE INDEX IF NOT EXISTS idx_assets_metadata ON assets USING GIN(metadata);
 CREATE TABLE IF NOT EXISTS asset_relationships (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
-    source_asset_id UUID NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-    target_asset_id UUID NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    source_asset_id UUID NOT NULL,  -- FK added after tables exist
+    target_asset_id UUID NOT NULL,   -- FK added after tables exist
     
     -- Relationship types
     relationship_type TEXT NOT NULL,
@@ -75,12 +77,18 @@ CREATE TABLE IF NOT EXISTS asset_relationships (
     metadata JSONB DEFAULT '{}',
     
     -- Timestamp
-    created_at TIMESTAMPTZ DEFAULT now(),
-    
-    -- Prevent duplicate relationships
-    CONSTRAINT unique_relationship UNIQUE (source_asset_id, target_asset_id, relationship_type),
-    CONSTRAINT no_self_reference CHECK (source_asset_id != target_asset_id)
+    created_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- Add FK constraints
+ALTER TABLE asset_relationships ADD CONSTRAINT fk_asset_rel_source
+    FOREIGN KEY (source_asset_id) REFERENCES assets(id) ON DELETE CASCADE;
+ALTER TABLE asset_relationships ADD CONSTRAINT fk_asset_rel_target
+    FOREIGN KEY (target_asset_id) REFERENCES assets(id) ON DELETE CASCADE;
+ALTER TABLE asset_relationships ADD CONSTRAINT unique_relationship
+    UNIQUE (source_asset_id, target_asset_id, relationship_type);
+ALTER TABLE asset_relationships ADD CONSTRAINT no_self_reference
+    CHECK (source_asset_id != target_asset_id);
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_asset_rel_source ON asset_relationships(source_asset_id);
@@ -107,69 +115,10 @@ CREATE TABLE IF NOT EXISTS storage_usage (
     image_count INT DEFAULT 0,
     audio_count INT DEFAULT 0,
     
-    last_updated TIMESTAMPTZ DEFAULT now(),
-    
-    UNIQUE (story_id)
+    last_updated TIMESTAMPTZ DEFAULT now()
 );
 
--- Index
-CREATE INDEX IF NOT EXISTS idx_storage_usage_story ON storage_usage(story_id);
-
-
--- ══════════════════════════════════════════════════════════════════════════════
--- FUNCTIONS & TRIGGERS
--- ══════════════════════════════════════════════════════════════════════════════
-
--- Function to update storage usage when assets change
-CREATE OR REPLACE FUNCTION update_storage_usage()
-RETURNS TRIGGER AS $$
-BEGIN
-    -- Update on insert
-    IF TG_OP = 'INSERT' THEN
-        UPDATE storage_usage SET
-            total_bytes = total_bytes + NEW.size_bytes,
-            video_bytes = video_bytes + CASE WHEN NEW.asset_type = 'video' THEN NEW.size_bytes ELSE 0 END,
-            image_bytes = image_bytes + CASE WHEN NEW.asset_type = 'image' THEN NEW.size_bytes ELSE 0 END,
-            audio_bytes = audio_bytes + CASE WHEN NEW.asset_type = 'audio' THEN NEW.size_bytes ELSE 0 END,
-            asset_count = asset_count + 1,
-            video_count = video_count + CASE WHEN NEW.asset_type = 'video' THEN 1 ELSE 0 END,
-            image_count = image_count + CASE WHEN NEW.asset_type = 'image' THEN 1 ELSE 0 END,
-            last_updated = now()
-        WHERE story_id = NEW.story_id;
-        
-        -- Insert if not exists
-        IF NOT FOUND THEN
-            INSERT INTO storage_usage (story_id, total_bytes, asset_count)
-            VALUES (NEW.story_id, NEW.size_bytes, 1);
-        END IF;
-        
-        RETURN NEW;
-    
-    -- Update on delete
-    ELSIF TG_OP = 'DELETE' THEN
-        UPDATE storage_usage SET
-            total_bytes = total_bytes - OLD.size_bytes,
-            video_bytes = video_bytes - CASE WHEN OLD.asset_type = 'video' THEN OLD.size_bytes ELSE 0 END,
-            image_bytes = image_bytes - CASE WHEN OLD.asset_type = 'image' THEN OLD.size_bytes ELSE 0 END,
-            audio_bytes = audio_bytes - CASE WHEN OLD.asset_type = 'audio' THEN OLD.size_bytes ELSE 0 END,
-            asset_count = asset_count - 1,
-            video_count = video_count - CASE WHEN OLD.asset_type = 'video' THEN 1 ELSE 0 END,
-            image_count = image_count - CASE WHEN OLD.asset_type = 'image' THEN 1 ELSE 0 END,
-            last_updated = now()
-        WHERE story_id = OLD.story_id;
-        
-        RETURN OLD;
-    END IF;
-    
-    RETURN NULL;
-END;
-$$ LANGUAGE plpgsql;
-
--- Trigger for automatic storage updates
-DROP TRIGGER IF EXISTS trigger_update_storage_usage ON assets;
-CREATE TRIGGER trigger_update_storage_usage
-AFTER INSERT OR DELETE ON assets
-FOR EACH ROW EXECUTE FUNCTION update_storage_usage();
+CREATE UNIQUE INDEX IF NOT EXISTS idx_storage_usage_story ON storage_usage(story_id);
 
 
 -- ══════════════════════════════════════════════════════════════════════════════
@@ -177,7 +126,7 @@ FOR EACH ROW EXECUTE FUNCTION update_storage_usage();
 -- ══════════════════════════════════════════════════════════════════════════════
 
 -- View: Story assets with relationships
-CREATE OR REPLACE VIEW story_assets_view AS
+CREATE VIEW IF NOT EXISTS story_assets_view AS
 SELECT 
     a.id,
     a.story_id,
@@ -198,7 +147,7 @@ FROM assets a
 LEFT JOIN asset_relationships r ON a.id = r.source_asset_id;
 
 -- View: Continuity chains (exit frame links)
-CREATE OR REPLACE VIEW continuity_chains AS
+CREATE VIEW IF NOT EXISTS continuity_chains AS
 SELECT 
     source.id as scene_id,
     source.storage_url as source_video,

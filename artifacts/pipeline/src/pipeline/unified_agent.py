@@ -278,13 +278,14 @@ class AssetManager:
         asset_type: Optional[str] = None,
     ) -> list[Asset]:
         """Search assets by tags or metadata."""
+        # CockroachDB requires explicit casts for ILIKE with placeholders
         sql = """
             SELECT * FROM assets 
-            WHERE story_id = $1 
+            WHERE story_id = $1::uuid
               AND (
-                  $2 = ANY(tags)
-                  OR storage_key ILIKE '%' || $2 || '%'
-                  OR metadata::text ILIKE '%' || $2 || '%'
+                  $2::text = ANY(SELECT jsonb_array_elements_text(tags))
+                  OR storage_key ILIKE '%' || $2::text || '%'
+                  OR metadata::text ILIKE '%' || $2::text || '%'
               )
         """
         params = [story_id, query]
