@@ -488,3 +488,146 @@ export async function retryJob(jobId) {
     method: "POST",
   });
 }
+
+// ─── Agent Assistant ──────────────────────────────────────────────────────────
+
+export async function createAgentConversation(storyId) {
+  return request("/pipeline/agent/conversations", {
+    method: "POST",
+    body: JSON.stringify({ story_id: storyId }),
+  });
+}
+
+export async function getAgentConversation(conversationId) {
+  return request(`/pipeline/agent/conversations/${conversationId}`);
+}
+
+export async function deleteAgentConversation(conversationId) {
+  return request(`/pipeline/agent/conversations/${conversationId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function agentChat(conversationId, message, includeContext = true) {
+  return request(`/pipeline/agent/chat?conversation_id=${conversationId}`, {
+    method: "POST",
+    body: JSON.stringify({ message, include_context: includeContext }),
+  });
+}
+
+export async function agentChatNew(message, storyId, includeContext = true) {
+  return request("/pipeline/agent/chat", {
+    method: "POST",
+    body: JSON.stringify({ message, story_id: storyId, include_context: includeContext }),
+  });
+}
+
+export async function listAgentTools() {
+  return request("/pipeline/agent/tools");
+}
+
+export async function getAgentTool(toolName) {
+  return request(`/pipeline/agent/tools/${toolName}`);
+}
+
+export async function executeAgentTool(toolName, arguments, storyId) {
+  return request("/pipeline/agent/tools/execute", {
+    method: "POST",
+    body: JSON.stringify({ tool_name: toolName, arguments }),
+  });
+}
+
+export async function getAgentStoryContext(storyId) {
+  return request(`/pipeline/agent/stories/${storyId}/context`);
+}
+
+export async function getAgentSceneTimeline(storyId, sceneId) {
+  return request(`/pipeline/agent/stories/${storyId}/timeline/${sceneId}`);
+}
+
+export async function listAgentStoryAssets(storyId, assetType) {
+  const url = assetType 
+    ? `/pipeline/agent/stories/${storyId}/assets?asset_type=${assetType}`
+    : `/pipeline/agent/stories/${storyId}/assets`;
+  return request(url);
+}
+
+export async function getAgentProviderStatus() {
+  return request("/pipeline/agent/providers/status");
+}
+
+/**
+ * Stream agent chat responses using Server-Sent Events.
+ * Returns an EventSource-compatible response.
+ * 
+ * Events:
+ * - message: { type: 'message', content: string }
+ * - tool_start: { type: 'tool_start', tool: string, arguments: object, id: string }
+ * - tool_complete: { type: 'tool_complete', tool: string, id: string, result: object }
+ * - tool_error: { type: 'tool_error', tool: string, id: string, error: string }
+ * - done: { type: 'done', message: string }
+ * - error: { type: 'error', message: string }
+ */
+export function agentChatStream(conversationId, message, includeContext = true) {
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || "";
+  const params = new URLSearchParams({ conversation_id: conversationId });
+  const url = `${baseUrl}/pipeline/agent/chat/stream?${params}`;
+  
+  return fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "text/event-stream",
+    },
+    body: JSON.stringify({ message, include_context: includeContext }),
+  });
+}
+
+export function agentChatStreamNew(message, storyId, includeContext = true) {
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || "";
+  const params = new URLSearchParams({ story_id: storyId });
+  const url = `${baseUrl}/pipeline/agent/chat/stream?${params}`;
+  
+  return fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "text/event-stream",
+    },
+    body: JSON.stringify({ message, include_context: includeContext }),
+  });
+}
+
+/**
+ * Poll job status until completion or error.
+ * @param {string} jobId - The job ID to poll
+ * @param {function} onUpdate - Callback with job status updates
+ * @param {number} interval - Polling interval in ms (default: 3000)
+ * @param {number} maxAttempts - Maximum polling attempts (default: 100)
+ */
+export async function pollJobStatus(jobId, onUpdate, interval = 3000, maxAttempts = 100) {
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || "";
+  const url = `${baseUrl}/pipeline/jobs/${jobId}`;
+  
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Failed to poll job: ${response.statusText}`);
+    }
+    
+    const job = await response.json();
+    onUpdate(job);
+    
+    if (job.status === "completed" || job.status === "failed" || job.status === "canceled") {
+      return job;
+    }
+    
+    await new Promise(resolve => setTimeout(resolve, interval));
+  }
+  
+  throw new Error("Max polling attempts reached");
+}
