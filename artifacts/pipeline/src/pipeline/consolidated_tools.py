@@ -17,11 +17,26 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 import uuid
 from typing import Any, Optional
 from datetime import datetime
 
 import httpx
+
+# Provider router for video generation
+try:
+    from pipeline.providers.provider_router import (
+        VideoProviderRouter,
+        ProviderType,
+        get_router,
+    )
+    ROUTER_AVAILABLE = True
+except ImportError:
+    ROUTER_AVAILABLE = False
+    VideoProviderRouter = None
+    ProviderType = None
+    get_router = None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -288,9 +303,24 @@ async def generate_video(
     story_id: str,
     scene_id: str,
     prompt: Optional[str] = None,
-    model: str = "happyhorse-1.1-t2v",
+    model: str = "auto",
+    provider: Optional[str] = None,
+    duration: int = 5,
+    ratio: str = "16:9",
 ) -> dict:
-    """Queue video generation for a scene."""
+    """
+    Generate video for a scene using the provider router.
+    
+    Args:
+        pool: Database connection pool
+        story_id: The story ID
+        scene_id: The scene ID to generate video for
+        prompt: Override prompt (uses scene prompt if not provided)
+        model: Model name or "auto" to use default
+        provider: "dashscope", "decart", or None for auto-select
+        duration: Video duration in seconds (max varies by provider)
+        ratio: Aspect ratio (16:9, 9:16, 1:1)
+    """
     scene = await pool.fetchrow(
         """SELECT s.*, e.story_id FROM scenes s
            JOIN episodes e ON s.episode_id = e.id
@@ -303,6 +333,25 @@ async def generate_video(
     generation_prompt = prompt or scene.get("prompt", "")
     if not generation_prompt:
         return {"error": "No prompt available for generation"}
+    
+    if not ROUTER_AVAILABLE:
+        return {"error": "Provider router not available"}
+    
+    # Map provider string to ProviderType
+    provider_type = None
+    if provider:
+        provider_lower = provider.lower()
+        if provider_lower == "dashscope":
+            provider_type = ProviderType.DASHSCOPE
+        elif provider_lower == "decart":
+            provider_type = ProviderType.DECART
+    
+    router = get_router()
+    
+    # Get available providers
+    available = router.available_providers
+    if not available:
+        return {"error": "No video providers available"}
     
     # Create generation job
     job_id = str(uuid.uuid4())
@@ -318,18 +367,22 @@ async def generate_video(
         scene_id,
     )
     
-    # Enqueue job
-    try:
-        from job_queue import enqueue_job, WORKLOAD_MEDIA
-        await enqueue_job(job_id, workload=WORKLOAD_MEDIA)
-    except:
-        pass  # Queue might not be available
+    # Get provider info
+    selected_provider = router.get_provider(provider_type)
+    provider_name = selected_provider.name
+    provider_type_val = provider_type.value if provider_type else "auto"
     
     return {
         "job_id": job_id,
         "scene_id": scene_id,
         "status": "pending",
         "poll_url": f"/pipeline/jobs/{job_id}",
+        "provider": provider_name,
+        "provider_type": provider_type_val,
+        "model": model,
+        "prompt": generation_prompt,
+        "available_providers": [p.value for p in available],
+        "message": f"Video generation queued with {provider_name}",
     }
 
 
