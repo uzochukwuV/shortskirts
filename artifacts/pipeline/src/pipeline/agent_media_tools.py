@@ -15,12 +15,11 @@ from urllib.parse import urlparse
 import httpx
 import ssl
 
-# Storage configuration
-R2_ACCOUNT_ID = os.environ.get("R2_ACCOUNT_ID", "")
-R2_ACCESS_KEY_ID = os.environ.get("R2_ACCESS_KEY_ID", "")
-R2_SECRET_ACCESS_KEY = os.environ.get("R2_SECRET_ACCESS_KEY", "")
-R2_BUCKET = os.environ.get("R2_BUCKET", "dysentry-media")
-R2_PUBLIC_URL = os.environ.get("R2_PUBLIC_URL", "")
+# Use existing B2 storage (from storage/b2.py)
+# Import the upload functions for consistent storage
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from storage.b2 import upload_file, public_url, BUCKET, build_key
 
 # Genblaze API
 GENBLAZE_API_URL = os.environ.get("GENBLAZE_API_URL", "https://api.genblaze.ai")
@@ -81,32 +80,20 @@ async def download_file(url: str, output_path: str) -> bool:
         return False
 
 
-async def upload_to_r2(local_path: str, remote_key: str) -> Optional[str]:
-    """Upload file to Cloudflare R2 and return public URL."""
+async def upload_to_b2(local_path: str, remote_key: str) -> Optional[str]:
+    """Upload file to Backblaze B2 and return presigned URL."""
     try:
-        import boto3
-        s3_client = boto3.client(
-            's3',
-            endpoint_url=f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
-            aws_access_key_id=R2_ACCESS_KEY_ID,
-            aws_secret_access_key=R2_SECRET_ACCESS_KEY,
-        )
-        
-        s3_client.upload_file(
-            local_path, 
-            R2_BUCKET, 
-            remote_key,
-            ExtraArgs={'ContentType': 'image/jpeg'}
-        )
-        
-        # Return public URL
-        if R2_PUBLIC_URL:
-            return f"{R2_PUBLIC_URL}/{remote_key}"
-        return f"https://{R2_BUCKET}.{R2_ACCOUNT_ID}.r2.dev/{remote_key}"
-        
+        # Use synchronous upload (blocking) in async context
+        # This is acceptable for small/medium files
+        url = upload_file(local_path, remote_key, "image/jpeg")
+        return url
     except Exception as e:
         print(f"Upload error: {e}")
         return None
+
+
+# Alias for backwards compatibility
+upload_to_r2 = upload_to_b2
 
 
 async def extract_frame_ffmpeg(

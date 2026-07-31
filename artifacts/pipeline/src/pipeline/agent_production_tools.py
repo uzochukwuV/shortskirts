@@ -5,6 +5,7 @@ These tools enable end-to-end video production from script to publish.
 """
 
 import os
+import sys
 import json
 import asyncio
 import subprocess
@@ -13,6 +14,10 @@ import uuid
 from typing import Any, Optional
 
 import httpx
+
+# Use existing B2 storage
+sys.path.insert(0, os.path.dirname(__file__))
+from storage.b2 import upload_file, BUCKET, build_key
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Audio Generation (TTS)
@@ -645,35 +650,9 @@ async def search_assets_impl(
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def _upload_audio(local_path: str, remote_key: str) -> Optional[str]:
-    """Upload audio file to R2 storage."""
+    """Upload audio file to B2 storage."""
     try:
-        import boto3
-        
-        r2_account = os.environ.get("R2_ACCOUNT_ID", "")
-        r2_key = os.environ.get("R2_ACCESS_KEY_ID", "")
-        r2_secret = os.environ.get("R2_SECRET_ACCESS_KEY", "")
-        r2_bucket = os.environ.get("R2_BUCKET", "dysentry-media")
-        r2_public = os.environ.get("R2_PUBLIC_URL", "")
-        
-        if not all([r2_account, r2_key, r2_secret]):
-            return None
-        
-        s3 = boto3.client(
-            's3',
-            endpoint_url=f"https://{r2_account}.r2.cloudflarestorage.com",
-            aws_access_key_id=r2_key,
-            aws_secret_access_key=r2_secret,
-        )
-        
-        s3.upload_file(
-            local_path, r2_bucket, remote_key,
-            ExtraArgs={'ContentType': 'audio/mpeg'}
-        )
-        
-        if r2_public:
-            return f"{r2_public}/{remote_key}"
-        return f"https://{r2_bucket}.{r2_account}.r2.dev/{remote_key}"
-        
+        return upload_file(local_path, remote_key, "audio/mpeg")
     except Exception as e:
         print(f"Audio upload error: {e}")
         return None
