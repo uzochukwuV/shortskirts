@@ -1,7 +1,8 @@
 """
-Advanced Media Tools for Agent - Frame extraction, screenshot, Genblaze integration.
+Advanced Media Tools for Agent - Frame extraction, screenshot, video generation.
 
 These tools enable truly agentic video production workflows.
+Uses existing DashScope (Alibaba) for video generation.
 """
 
 import os
@@ -11,19 +12,12 @@ import subprocess
 import tempfile
 import uuid
 from typing import Any, Optional
-from urllib.parse import urlparse
 import httpx
-import ssl
 
 # Use existing B2 storage (from storage/b2.py)
-# Import the upload functions for consistent storage
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from storage.b2 import upload_file, public_url, BUCKET, build_key
-
-# Genblaze API
-GENBLAZE_API_URL = os.environ.get("GENBLAZE_API_URL", "https://api.genblaze.ai")
-GENBLAZE_API_KEY = os.environ.get("GENBLAZE_API_KEY", "")
 
 
 def _row_to_dict(row) -> dict:
@@ -36,43 +30,23 @@ def _row_to_dict(row) -> dict:
 async def download_file(url: str, output_path: str) -> bool:
     """Download a file from URL to local path."""
     try:
-        # Handle R2/S3 URLs
-        if "r2.dev" in url or ".cloudflarestorage.com" in url:
-            # Try direct download first
-            async with httpx.AsyncClient(timeout=60.0) as client:
+        # Handle B2 URLs - extract key and get fresh presigned URL
+        if "backblazeb2.com" in url or "s3" in url:
+            # For B2 URLs, try direct download first
+            async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
                 response = await client.get(url)
                 if response.status_code == 200:
                     with open(output_path, 'wb') as f:
                         f.write(response.content)
-                    return True
+                    return os.path.exists(output_path) and os.path.getsize(output_path) > 0
         
-        # Try with signed URL generation for R2
-        if R2_ACCOUNT_ID and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY:
-            try:
-                import boto3
-                s3_client = boto3.client(
-                    's3',
-                    endpoint_url=f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
-                    aws_access_key_id=R2_ACCESS_KEY_ID,
-                    aws_secret_access_key=R2_SECRET_ACCESS_KEY,
-                )
-                
-                # Extract key from URL
-                parsed = urlparse(url)
-                key = parsed.path.lstrip('/')
-                
-                s3_client.download_file(R2_BUCKET, key, output_path)
-                return True
-            except Exception as e:
-                print(f"S3 download error: {e}")
-        
-        # Fallback to direct HTTP download
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        # For other URLs (presigned URLs), try direct download
+        async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
             response = await client.get(url)
             if response.status_code == 200:
                 with open(output_path, 'wb') as f:
                     f.write(response.content)
-                return True
+                return os.path.exists(output_path) and os.path.getsize(output_path) > 0
         
         return False
     except Exception as e:
@@ -624,7 +598,7 @@ async def extract_character_from_scene_impl(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TOOL: generate_video_genblaze
+# TOOL: generate_video (using DashScope/Alibaba)
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def generate_video_genblaze_impl(
@@ -638,12 +612,12 @@ async def generate_video_genblaze_impl(
     duration: int = 5,
 ) -> dict[str, Any]:
     """
-    Generate a video using Genblaze API.
+    Generate a video using DashScope (Alibaba) API.
     
-    This tool integrates with Genblaze for actual video generation.
+    This tool integrates with DashScope for actual video generation.
     It supports:
-    - Text-to-video generation
-    - Image-to-video (using reference images)
+    - Text-to-video (t2v) generation
+    - Image-to-video (i2v) generation using reference images
     - Character consistency via reference URLs
     
     Args:
@@ -655,9 +629,15 @@ async def generate_video_genblaze_impl(
         style: Video style (anime, realistic, etc.)
         duration: Video duration in seconds
     """
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+    
+    # Use existing scene_gen module for video generation
+    from pipeline.scene_gen import generate_scene_clip
+    
     # Get scene data
     scene = await pool.fetchrow(
-        """SELECT s.*, e.story_id FROM scenes s
+        """SELECT s.*, e.story_id, e.title as episode_title FROM scenes s
            JOIN episodes e ON s.episode_id = e.id
            WHERE s.id = $1 AND e.story_id = $2""",
         scene_id, story_id,
@@ -666,125 +646,155 @@ async def generate_video_genblaze_impl(
     if not scene:
         raise ValueError(f"Scene not found: {scene_id}")
     
-    # Build generation prompt
-    generation_prompt = prompt or scene.get("prompt") or scene.get("generation_metadata", {}).get("visual_prompt", "")
+    episode = await pool.fetchrow(
+        "SELECT * FROM episodes WHERE id = $1",
+        scene["episode_id"]
+    )
     
-    if not generation_prompt:
-        return {
-            "success": False,
-            "error": "No prompt available for generation",
-            "hint": "Provide a prompt or ensure scene has a visual_prompt in metadata",
-        }
+    story = await pool.fetchrow(
+        "SELECT * FROM stories WHERE id = $1",
+        story_id,
+    )
     
-    # Get metadata for additional context
+    if not story:
+        raise ValueError(f"Story not found: {story_id}")
+    
+    # Build generation context
+    scene_dict = dict(scene)
+    scene_dict["id"] = str(scene["id"])
+    
+    # Get metadata for reference images
     metadata = json.loads(scene.get("generation_metadata") or "{}")
     
-    # Build Genblaze API request
-    genblaze_payload = {
-        "prompt": generation_prompt,
-        "duration": duration,
-        "style": style,
-        "aspect_ratio": metadata.get("frame_ratio", "16:9"),
-    }
-    
-    # Add reference images
+    # Collect reference images
     all_refs = []
     if reference_image_url:
         all_refs.append(reference_image_url)
     if character_ref_urls:
         all_refs.extend(character_ref_urls)
     
-    # Also check for reference_image_urls in scene metadata
+    # Also check scene metadata for reference_image_urls
     scene_refs = metadata.get("reference_image_urls", [])
-    all_refs.extend(scene_refs)
+    if isinstance(scene_refs, list):
+        all_refs.extend(scene_refs)
     
-    if all_refs:
-        genblaze_payload["image_urls"] = all_refs[:5]  # Limit to 5 images
-    
-    # Add continuation context if available
-    continuity = metadata.get("continuity_reference")
-    if continuity:
-        genblaze_payload["continuation"] = {
-            "source_scene_id": continuity.get("source_scene_id"),
-            "exit_frame_url": continuity.get("exit_frame_url"),
-        }
-    
-    # Call Genblaze API
-    if not GENBLAZE_API_KEY:
-        return {
-            "success": False,
-            "error": "Genblaze API key not configured",
-            "hint": "Set GENBLAZE_API_KEY in environment",
-        }
-    
-    try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                f"{GENBLAZE_API_URL}/v1/generate/video",
-                headers={
-                    "Authorization": f"Bearer {GENBLAZE_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json=genblaze_payload,
-            )
-            
-            if response.status_code != 200:
-                return {
-                    "success": False,
-                    "error": f"Genblaze API error: {response.status_code}",
-                    "details": response.text[:500],
-                }
-            
-            result = response.json()
-            
-            # Create a generation job to track progress
-            job = await pool.fetchrow(
-                """INSERT INTO generation_jobs
-                   (entity_type, entity_id, status, total_steps, current_step, job_type, result)
-                   VALUES ('scene', $1, 'pending', 1, 'Queued for Genblaze', 'genblaze_video', $2::jsonb)
-                   RETURNING *""",
-                scene_id,
-                json.dumps({
-                    "genblaze_task_id": result.get("task_id"),
-                    "prompt": generation_prompt,
-                    "reference_images": len(all_refs),
-                }),
-            )
-            
-            # Update scene status
-            await pool.execute(
-                """UPDATE scenes SET status = 'running', updated_at = now()
-                   WHERE id = $1""",
-                scene_id,
-            )
-            
-            # Enqueue job
+    # Get character references
+    characters = await pool.fetch(
+        "SELECT * FROM characters WHERE story_id = $1",
+        story_id,
+    )
+    for char in characters:
+        char_refs = char.get("ref_image_urls") or []
+        if isinstance(char_refs, str):
             try:
-                from job_queue import enqueue_job, WORKLOAD_MEDIA
-                await enqueue_job(str(job["id"]), workload=WORKLOAD_MEDIA)
+                char_refs = json.loads(char_refs)
             except:
-                pass  # Queue might not be available
+                char_refs = []
+        if isinstance(char_refs, list):
+            all_refs.extend(char_refs)
+    
+    # Get continuity reference (exit frame from previous scene)
+    continuity_ref = None
+    continuity = metadata.get("continuity_reference")
+    if continuity and continuity.get("exit_frame_url"):
+        continuity_ref = continuity["exit_frame_url"]
+        if continuity_ref not in all_refs:
+            all_refs.insert(0, continuity_ref)
+    
+    # Create generation job
+    job = await pool.fetchrow(
+        """INSERT INTO generation_jobs
+           (entity_type, entity_id, status, total_steps, current_step, job_type, result)
+           VALUES ('scene', $1, 'pending', 1, 'Queued for generation', 'scene_gen', $2::jsonb)
+           RETURNING *""",
+        scene_id,
+        json.dumps({
+            "provider": "dashscope",
+            "prompt": prompt or scene.get("prompt", ""),
+            "reference_images": all_refs[:5],
+            "style": style,
+            "duration": duration,
+        }),
+    )
+    
+    # Update scene status
+    await pool.execute(
+        """UPDATE scenes SET status = 'running', updated_at = now()
+           WHERE id = $1""",
+        scene_id,
+    )
+    
+    # Enqueue job
+    try:
+        from job_queue import enqueue_job, WORKLOAD_MEDIA
+        await enqueue_job(str(job["id"]), workload=WORKLOAD_MEDIA)
+    except:
+        pass  # Queue might not be available
+    
+    # Build story context
+    story_context = {
+        "id": str(story["id"]),
+        "title": story.get("title", ""),
+        "prompt": story.get("prompt", ""),
+        "episode_title": episode.get("title", "") if episode else "",
+        "workflow_type": story.get("workflow_type", "creator_series"),
+    }
+    
+    # Try to generate synchronously (for immediate feedback)
+    # In production, this would be handled by the worker
+    try:
+        result = await generate_scene_clip(
+            story_id=str(story_id),
+            episode_id=str(episode["id"]) if episode else str(scene["episode_id"]),
+            scene=scene_dict,
+            story_context=story_context,
+            character_refs=all_refs[:5],
+            previous_exit_frame_url=continuity_ref,
+            style=style,
+        )
+        
+        if result.get("video_url"):
+            # Update scene with video URL
+            await pool.execute(
+                """UPDATE scenes SET 
+                   clip_url = $1, 
+                   status = 'completed', 
+                   updated_at = now()
+                   WHERE id = $2""",
+                result["video_url"], scene_id,
+            )
+            
+            # Mark job complete
+            await pool.execute(
+                """UPDATE generation_jobs SET 
+                   status = 'completed', 
+                   completed_at = now(),
+                   result = $1::jsonb
+                   WHERE id = $2""",
+                json.dumps({"video_url": result["video_url"]}),
+                str(job["id"]),
+            )
             
             return {
                 "success": True,
                 "job_id": str(job["id"]),
-                "genblaze_task_id": result.get("task_id"),
-                "status": "pending",
+                "video_url": result["video_url"],
+                "status": "completed",
                 "poll_url": f"/pipeline/jobs/{job['id']}",
-                "api_response": result,
+                "message": "Video generated successfully",
             }
-            
-    except httpx.TimeoutException:
-        return {
-            "success": False,
-            "error": "Genblaze API timeout",
-            "hint": "Try again or use a shorter prompt",
-        }
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-        }
+        print(f"Synchronous generation failed (expected in production): {e}")
+        # Job is queued, return pending status
+    
+    return {
+        "success": True,
+        "job_id": str(job["id"]),
+        "status": "pending",
+        "poll_url": f"/pipeline/jobs/{job['id']}",
+        "message": "Video generation queued. Poll for status.",
+        "scenes_for_reference": len(all_refs),
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -796,104 +806,39 @@ async def poll_genblaze_status_impl(
     pool: Optional[Any] = None,
 ) -> dict[str, Any]:
     """
-    Poll Genblaze API for video generation status.
+    Poll generation job status.
     
     Args:
         job_id: The generation_jobs ID
         pool: Database pool (optional)
     """
-    if not GENBLAZE_API_KEY:
+    # Get job from database
+    if not pool:
         return {
             "success": False,
-            "error": "Genblaze API key not configured",
+            "error": "Database pool not provided",
         }
     
-    # Get job from database
-    job = None
-    if pool:
-        job = await pool.fetchrow(
-            "SELECT * FROM generation_jobs WHERE id = $1",
-            job_id,
-        )
-        
-        if job:
-            result_data = json.loads(job.get("result") or "{}")
-            genblaze_task_id = result_data.get("genblaze_task_id")
-            
-            if genblaze_task_id:
-                # Poll Genblaze
-                try:
-                    async with httpx.AsyncClient(timeout=30.0) as client:
-                        response = await client.get(
-                            f"{GENBLAZE_API_URL}/v1/tasks/{genblaze_task_id}",
-                            headers={"Authorization": f"Bearer {GENBLAZE_API_KEY}"},
-                        )
-                        
-                        if response.status_code == 200:
-                            task_result = response.json()
-                            
-                            status = task_result.get("status", "unknown")
-                            video_url = task_result.get("video_url")
-                            
-                            # Update job in database
-                            if pool:
-                                update_data = {
-                                    "status": status,
-                                    "current_step": f"Genblaze: {status}",
-                                }
-                                
-                                if status == "completed" and video_url:
-                                    update_data["result"] = json.dumps({
-                                        "video_url": video_url,
-                                        "genblaze_task_id": genblaze_task_id,
-                                    })
-                                    
-                                    # Update scene with video URL
-                                    await pool.execute(
-                                        """UPDATE scenes 
-                                           SET clip_url = $1, status = 'completed', updated_at = now()
-                                           WHERE id = $2""",
-                                        video_url, job["entity_id"],
-                                    )
-                                    
-                                elif status == "failed":
-                                    update_data["error"] = task_result.get("error", "Generation failed")
-                                    update_data["completed_at"] = "now()"
-                                    
-                                    await pool.execute(
-                                        """UPDATE scenes SET status = 'failed', updated_at = now()
-                                           WHERE id = $1""",
-                                        job["entity_id"],
-                                    )
-                                
-                                await pool.execute(
-                                    """UPDATE generation_jobs 
-                                       SET status = $1, current_step = $2, result = COALESCE(result, '{}'::jsonb) || $3::jsonb,
-                                           completed_at = CASE WHEN $1 IN ('completed', 'failed') THEN now() ELSE completed_at END
-                                       WHERE id = $4""",
-                                    status,
-                                    update_data.get("current_step"),
-                                    json.dumps({"genblaze_response": task_result}),
-                                    job_id,
-                                )
-                            
-                            return {
-                                "success": True,
-                                "job_id": job_id,
-                                "status": status,
-                                "video_url": video_url,
-                                "task_result": task_result,
-                            }
-                        
-                except Exception as e:
-                    return {
-                        "success": False,
-                        "error": str(e),
-                    }
+    job = await pool.fetchrow(
+        "SELECT * FROM generation_jobs WHERE id = $1",
+        job_id,
+    )
+    
+    if not job:
+        return {
+            "success": False,
+            "error": "Job not found",
+        }
     
     return {
-        "success": False,
-        "error": "Job not found or pool not provided",
+        "success": True,
+        "job_id": str(job["id"]),
+        "status": job["status"],
+        "current_step": job["current_step"],
+        "error": job.get("error"),
+        "result": job.get("result"),
+        "created_at": str(job["created_at"]),
+        "completed_at": str(job["completed_at"]) if job["completed_at"] else None,
     }
 
 
