@@ -626,3 +626,28 @@ CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires_at ON admin_sessions(expir
 CREATE INDEX IF NOT EXISTS idx_pipeline_metrics_kind ON pipeline_metrics(metric_kind);
 CREATE INDEX IF NOT EXISTS idx_pipeline_metrics_job_id ON pipeline_metrics(job_id);
 CREATE INDEX IF NOT EXISTS idx_pipeline_metrics_created_at ON pipeline_metrics(created_at);
+
+-- ── Agent Conversations ─────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS agent_conversations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    story_id UUID NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_conversations_user_id ON agent_conversations(user_id);
+CREATE INDEX IF NOT EXISTS idx_agent_conversations_story_id ON agent_conversations(story_id);
+
+CREATE TABLE IF NOT EXISTS agent_messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    conversation_id UUID NOT NULL REFERENCES agent_conversations(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,  -- 'user', 'assistant', 'system', 'tool'
+    content TEXT NOT NULL,
+    tool_calls JSONB,    -- Stored tool call data if any
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_messages_conversation_id ON agent_messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_agent_messages_created_at ON agent_messages(created_at);

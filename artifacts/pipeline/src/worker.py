@@ -39,6 +39,7 @@ from pipeline.job_handlers import (
     run_scene_regen_job,
     run_scheduled_job,
 )
+from pipeline.assembly_handler import run_assembly_job
 from pipeline.runtime_context import job_context
 from pipeline.orchestrator import run_story_generation
 
@@ -97,6 +98,8 @@ async def _run_handler(pool, row: dict, worker_id: str):
         "scheduled_series_continuation",
     }:
         return await run_scheduled_job(str(row["entity_id"]), str(row["id"]), worker_id)
+    if entity_type == "episode" or job_type == "episode_assembly":
+        return await run_assembly_job(pool, str(row["id"]), worker_id)
     raise RuntimeError(f"Unsupported job type: {entity_type}/{job_type}")
 
 

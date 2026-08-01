@@ -28,6 +28,7 @@ from routes.schedules  import router as schedules_router
 from routes.social     import router as social_router
 from routes.stream     import router as stream_router
 from routes.chat       import router as chat_router
+from routes.agent      import router as agent_router
 from auth              import router as auth_router
 from pipeline.media_tools import ffmpeg_available, ffmpeg_path
 
@@ -80,6 +81,7 @@ app.include_router(publish_router)
 app.include_router(schedules_router)
 app.include_router(stream_router)
 app.include_router(chat_router)
+app.include_router(agent_router)
 
 
 @app.get("/pipeline/health")
@@ -106,6 +108,7 @@ async def root():
             "checkpoint_reviews: pause every 3 narrated-image scenes for human approval",
             "granular_regeneration: per-scene, per-character-refs",
             "brand_bibles: brand|character|world|campaign memory",
+            "agent_assistant: chat-based AI production assistant with tool calling",
         ],
         "endpoints": {
             "stories": [
@@ -203,6 +206,19 @@ async def root():
                 "POST   /pipeline/schedules/{schedule_id}/run-now",
                 "POST   /pipeline/schedules/dispatch-due",
                 "GET    /pipeline/schedules/{schedule_id}/runs",
+            ],
+            "agent": [
+                "POST   /pipeline/agent/conversations",
+                "GET    /pipeline/agent/conversations/{id}",
+                "DELETE /pipeline/agent/conversations/{id}",
+                "POST   /pipeline/agent/chat",
+                "GET    /pipeline/agent/tools",
+                "GET    /pipeline/agent/tools/{tool_name}",
+                "POST   /pipeline/agent/tools/execute",
+                "GET    /pipeline/agent/stories/{story_id}/context",
+                "GET    /pipeline/agent/stories/{story_id}/timeline/{scene_id}",
+                "GET    /pipeline/agent/stories/{story_id}/assets",
+                "GET    /pipeline/agent/providers/status",
             ],
         },
     }
