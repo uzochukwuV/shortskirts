@@ -1,0 +1,28 @@
+{
+  "name": "ChatMessage",
+  "type": "object",
+  "properties": {
+    "video_id": {
+      "type": "string",
+      "description": "Reference to the Video this message belongs to",
+      "title": "Video ID"
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "user",
+        "assistant"
+      ],
+      "title": "Role"
+    },
+    "content": {
+      "type": "string",
+      "title": "Content"
+    }
+  },
+  "required": [
+    "video_id",
+    "role",
+    "content"
+  ]
+}

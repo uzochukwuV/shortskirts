@@ -189,7 +189,7 @@ class DashScopeVideoProvider(DashScopeBase):
         
         model = step.model
         prompt = step.prompt or ""
-        images = step.inputs or []
+        images = [getattr(asset, "url", asset) for asset in (step.inputs or [])]
         capability = _classify_capability(model, images)
         
         endpoint = "/services/aigc/video-generation/video-synthesis"
@@ -204,8 +204,10 @@ class DashScopeVideoProvider(DashScopeBase):
         
         resolution = step.params.get("resolution", "1080P")
         ratio = step.params.get("ratio", "16:9")
-        # Use longer duration for better motion (up to 8 seconds)
-        duration = min(step.params.get("duration", 5), 8)
+        # Keep test renders cheap. Wan video requests use the provider-safe 2s minimum.
+        test_cap = max(2, int(os.environ.get("DASHSCOPE_TEST_MAX_DURATION_SECONDS", "2")))
+        requested_duration = int(step.params.get("duration", test_cap))
+        duration = max(2, min(requested_duration, test_cap, 8))
         
         # Enhanced quality parameters
         seed = step.params.get("seed")
@@ -425,7 +427,7 @@ class DashScopeImageProvider(DashScopeBase):
         """Build DashScope image payload."""
         model = step.model
         prompt = step.prompt or ""
-        images = step.inputs or []
+        images = [getattr(asset, "url", asset) for asset in (step.inputs or [])]
         
         payload: dict = {
             "model": model,

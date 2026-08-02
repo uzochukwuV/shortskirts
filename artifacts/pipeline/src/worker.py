@@ -20,7 +20,9 @@ from job_queue import (
     WORKLOAD_PUBLISH,
     WORKLOAD_SCHEDULER,
     WORKLOAD_STORY,
-    blpop_job,
+    ack_job,
+    processing_job_ids,
+    reserve_job,
     claim_job,
     close_redis,
     enqueue_job,
@@ -103,6 +105,32 @@ async def _run_handler(pool, row: dict, worker_id: str):
     raise RuntimeError(f"Unsupported job type: {entity_type}/{job_type}")
 
 
+async def is_job_canceled(pool, job_id: str) -> bool:
+    return bool(await pool.fetchval("SELECT status = 'canceled' FROM generation_jobs WHERE id=$1", job_id))
+
+
+async def run_handler_cooperatively(pool, row: dict, worker_id: str) -> tuple[object, bool]:
+    """Check durable cancellation while the handler awaits provider work."""
+    job_id = str(row["id"])
+    if await is_job_canceled(pool, job_id):
+        return None, True
+    handler = asyncio.create_task(_run_handler(pool, row, worker_id))
+    try:
+        while True:
+            done, _ = await asyncio.wait({handler}, timeout=1)
+            if done:
+                return await handler, False
+            if await is_job_canceled(pool, job_id):
+                handler.cancel()
+                with suppress(asyncio.CancelledError):
+                    await handler
+                return None, True
+    finally:
+        if not handler.done():
+            handler.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler
+
 async def process_job(pool, row, worker_id: str):
     row = dict(row)
     job_id = str(row["id"])
@@ -122,18 +150,21 @@ async def process_job(pool, row, worker_id: str):
             workload=workload,
             worker_id=worker_id,
         ):
-            result = await _run_handler(pool, row, worker_id)
+            result, canceled = await run_handler_cooperatively(pool, row, worker_id)
             finished_at = datetime.now(timezone.utc)
             duration_ms = int((finished_at - started_at).total_seconds() * 1000) if started_at else int((time.monotonic() - job_started) * 1000)
+            if canceled:
+                await record_pipeline_metric(
+                    metric_kind="job", status="canceled", duration_ms=duration_ms or None,
+                    step_name="job", job_id=job_id, entity_type=row["entity_type"],
+                    entity_id=str(row["entity_id"]), workload=workload,
+                    extra={"attempts": attempts + 1, "job_type": row.get("job_type")},
+                )
+                return {"canceled": True}
             await record_pipeline_metric(
-                metric_kind="job",
-                status="completed",
-                duration_ms=duration_ms or None,
-                step_name="job",
-                job_id=job_id,
-                entity_type=row["entity_type"],
-                entity_id=str(row["entity_id"]),
-                workload=workload,
+                metric_kind="job", status="completed", duration_ms=duration_ms or None,
+                step_name="job", job_id=job_id, entity_type=row["entity_type"],
+                entity_id=str(row["entity_id"]), workload=workload,
                 extra={"attempts": attempts + 1, "job_type": row.get("job_type")},
             )
             return result
@@ -230,6 +261,22 @@ async def process_job(pool, row, worker_id: str):
             await hb
 
 
+async def reconcile_reserved_jobs(pool, workload: str) -> None:
+    """Release only reservations that cannot belong to a live worker."""
+    for job_id in set(await processing_job_ids(workload)):
+        row = await pool.fetchrow(
+            "SELECT status, (lease_expires_at IS NULL OR lease_expires_at < now()) AS lease_expired "
+            "FROM generation_jobs WHERE id=$1",
+            job_id,
+        )
+        if not row or row["status"] in {"completed", "failed", "canceled"}:
+            await ack_job(job_id, workload)
+        elif row["status"] == "pending":
+            await enqueue_job(job_id, workload=workload)
+            await ack_job(job_id, workload)
+        elif row["lease_expired"]:
+            await ack_job(job_id, workload)
+
 async def main():
     await init_db()
     pool = await get_pool()
@@ -248,6 +295,7 @@ async def main():
     )
 
     for workload in workloads:
+        await reconcile_reserved_jobs(pool, workload)
         for job_id in await recover_expired_jobs(pool, workload):
             await enqueue_job(job_id, workload=workload)
             print(f"[worker:{WORKER_WORKLOAD}] recovered expired job {job_id} -> {workload}")
@@ -256,25 +304,29 @@ async def main():
         while True:
             for workload in workloads:
                 await promote_due_delayed_jobs(workload)
-                job_id = await blpop_job(workload, timeout=1)
+                job_id = await reserve_job(workload, timeout=1)
                 if not job_id:
                     continue
 
                 row = await claim_job(pool, job_id, worker_id, LEASE_SECONDS)
                 if not row:
+                    await ack_job(job_id, workload)
                     continue
                 row_dict = dict(row)
                 expected = job_workload(row_dict["entity_type"], row_dict.get("job_type"))
-                if expected != workload and WORKER_WORKLOAD != WORKLOAD_ALL:
-                    print(
-                        f"[worker:{WORKER_WORKLOAD}] skipping job {job_id} type={row_dict['entity_type']}/{row_dict.get('job_type')} expected={workload}"
-                    )
+                if expected != workload:
+                    await mark_job_retrying(pool, job_id, "Routed to incorrect workload", worker_id)
+                    await enqueue_job(job_id, workload=expected)
+                    await ack_job(job_id, workload)
                     continue
 
                 print(
                     f"[worker:{WORKER_WORKLOAD}] claimed job {job_id} type={row_dict['entity_type']}/{row_dict.get('job_type')}"
                 )
-                await process_job(pool, row_dict, worker_id)
+                try:
+                    await process_job(pool, row_dict, worker_id)
+                finally:
+                    await ack_job(job_id, workload)
     finally:
         await close_redis()
         await close_pool()

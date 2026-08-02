@@ -409,10 +409,29 @@ async def chat(
     # Process tool calls
     actions = []
     for tc in response.tool_calls:
-        tool_result = await executor.execute(tc.name, tc.arguments, pool)
+        from pipeline.agent_tools import get_tool_definition
+
+        tool_definition = get_tool_definition(tc.name)
+        if tool_definition and tool_definition.requires_confirmation and not tc.arguments.get("confirm"):
+            actions.append({
+                "tool": tc.name,
+                "arguments": tc.arguments,
+                "result": None,
+                "error": "Confirmation required before executing this tool",
+                "requires_confirmation": True,
+            })
+            messages.append({
+                "role": "tool",
+                "content": json.dumps({"error": "Confirmation required before executing this tool"}),
+            })
+            continue
+
+        tool_args = dict(tc.arguments)
+        tool_args.pop("confirm", None)
+        tool_result = await executor.execute(tc.name, tool_args, pool)
         actions.append({
             "tool": tc.name,
-            "arguments": tc.arguments,
+            "arguments": tool_args,
             "result": tool_result.result if tool_result.success else None,
             "error": tool_result.error,
         })
@@ -422,7 +441,7 @@ async def chat(
             "role": "tool",
             "content": json.dumps(tool_result.result if tool_result.success else {"error": tool_result.error}),
         })
-    
+
     # Save assistant response
     await components["conversation_manager"].add_message(
         pool, conversation_id, "assistant", response.content
@@ -451,11 +470,22 @@ async def execute_tool(
     components = _get_agent_components()
     executor = components["executor"]
     
-    result = await executor.execute(request.tool_name, request.arguments, pool)
+    from pipeline.agent_tools import get_tool_definition
+
+    tool_definition = get_tool_definition(request.tool_name)
+    if tool_definition and tool_definition.requires_confirmation and not request.arguments.get("confirm"):
+        raise HTTPException(
+            status_code=400,
+            detail="This tool requires explicit confirmation before it can run",
+        )
+
+    tool_args = dict(request.arguments)
+    tool_args.pop("confirm", None)
+    result = await executor.execute(request.tool_name, tool_args, pool)
     
     return {
         "tool": request.tool_name,
-        "arguments": request.arguments,
+        "arguments": tool_args,
         "success": result.success,
         "result": result.result,
         "error": result.error,
@@ -578,6 +608,15 @@ async def search_story_assets(
     Search assets within a story.
     """
     pool = await get_pool()
+    user_id = str(user["id"])
+
+    # Verify ownership
+    story = await pool.fetchrow(
+        "SELECT id FROM stories WHERE id = $1 AND owner_id = $2",
+        story_id, user_id,
+    )
+    if not story:
+        raise HTTPException(status_code=404, detail="Story not found")
     
     components = _get_agent_components()
     asset_manager = components["asset_manager_class"](pool)
@@ -592,8 +631,8 @@ async def search_story_assets(
         "query": q,
         "results": [asdict(a) for a in assets],
         "total": len(assets),
-    }
-
+    
+}
 
 # ─── Provider Status ─────────────────────────────────────────────────────────────
 
@@ -875,3 +914,5 @@ async def get_provider_status():
     
     status = await get_provider_status_impl()
     return status
+
+
