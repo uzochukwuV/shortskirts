@@ -17,8 +17,6 @@ AIML_BASE_URL = "https://api.aimlapi.com"
 QWEN_IMAGE_MODELS = ["wanx2.1-t2i-turbo", "wanx-v1"]
 QWEN_IMAGE_REF_MODEL = "wan2.7-image-pro"
 QWEN_IMAGE_EDIT_MODEL = os.getenv("QWEN_IMAGE_EDIT_MODEL", "qwen-image-edit-plus")
-# AIML image models (fallback)
-AIML_IMAGE_MODELS = ["alibaba/wan2.7-image", "flux/schnell"]
 
 
 async def generate_character_references(
@@ -61,8 +59,11 @@ async def generate_image_bytes(
     if result:
         return result
 
-    # Fallback: AIML
-    return await _try_aiml_image(prompt)
+    # AIML is intentionally disabled until its API is restored. Do not make
+    # a second provider call here; the worker will report the image failure
+    # and the caller can choose a supported workflow explicitly.
+    print("[character_gen] No supported image provider succeeded; AIML fallback is disabled")
+    return None
 
 
 async def _generate_image(prompt: str) -> Optional[bytes]:
@@ -413,44 +414,7 @@ async def _poll_wan_image(task_id: str, http: httpx.AsyncClient, api_key: str, w
 
 
 async def _try_aiml_image(prompt: str) -> Optional[bytes]:
-    aiml_key = os.environ.get("AIML_API_KEY", "")
-    if not aiml_key:
-        return None
-
-    for model in AIML_IMAGE_MODELS:
-        try:
-            async with httpx.AsyncClient(timeout=60) as http:
-                data = await run_provider_step(
-                    "aiml_image",
-                    f"image:{model}:submit",
-                    lambda: _post_json(
-                        http,
-                        f"{AIML_BASE_URL}/v1/images/generations",
-                        headers={
-                            "Authorization": f"Bearer {aiml_key}",
-                            "Content-Type": "application/json",
-                        },
-                        payload={"model": model, "prompt": prompt, "n": 1, "size": "1024x1024"},
-                    ),
-                    extra={"model": model},
-                )
-
-            image_url = data["data"][0]["url"]
-            async with httpx.AsyncClient(timeout=60) as http:
-                img_r = await run_provider_step(
-                    "aiml_image",
-                    f"image:{model}:download",
-                    lambda: http.get(image_url, follow_redirects=True),
-                    extra={"model": model},
-                )
-                print(f"[character_gen] Generated image via AIML model: {model}")
-                return img_r.content
-
-        except Exception as e:
-            print(f"[character_gen] AIML image model {model} failed: {str(e)[:80]}")
-            continue
-
-    print("[character_gen] All image models failed.")
+    print("[character_gen] AIML image fallback is disabled until that API is restored")
     return None
 
 

@@ -37,7 +37,7 @@ from pipeline.media_tools import ffmpeg_available, ffmpeg_path
 async def lifespan(app: FastAPI):
     # Initialize database with timeout to prevent hanging
     try:
-        await asyncio.wait_for(init_db(), timeout=30.0)
+        await asyncio.wait_for(init_db(), timeout=90.0)
         print("[startup] Database initialized successfully")
     except asyncio.TimeoutError:
         print("[startup] WARNING: Database initialization timed out, continuing anyway")

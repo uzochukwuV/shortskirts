@@ -891,7 +891,8 @@ async def generate_video_genblaze_impl(
             style=style,
         )
         
-        if result.get("video_url"):
+        clip_url = result.get("clip_url") or result.get("video_url")
+        if clip_url:
             # Update scene with video URL
             await pool.execute(
                 """UPDATE scenes SET 
@@ -899,7 +900,7 @@ async def generate_video_genblaze_impl(
                    status = 'completed', 
                    updated_at = now()
                    WHERE id = $2""",
-                result["video_url"], scene_id,
+                clip_url, scene_id,
             )
             
             # Mark job complete
@@ -909,14 +910,14 @@ async def generate_video_genblaze_impl(
                    completed_at = now(),
                    result = $1::jsonb
                    WHERE id = $2""",
-                json.dumps({"video_url": result["video_url"]}),
+                json.dumps({"video_url": clip_url}),
                 str(job["id"]),
             )
             
             return {
                 "success": True,
                 "job_id": str(job["id"]),
-                "video_url": result["video_url"],
+                "video_url": clip_url,
                 "status": "completed",
                 "poll_url": f"/pipeline/jobs/{job['id']}",
                 "message": "Video generated successfully",

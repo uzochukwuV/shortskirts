@@ -31,15 +31,6 @@ VIDEO_MODELS: dict[str, ModelSpec] = {
         cost_tier="medium",
         priority=10,
     ),
-    "wan2.7-r2v-2026-06-12": ModelSpec(
-        model_id="wan2.7-r2v-2026-06-12",
-        provider="dashscope",
-        capability="r2v",
-        supports_refs=True,
-        max_refs=5,
-        cost_tier="high",
-        priority=20,
-    ),
     "happyhorse-1.1-i2v": ModelSpec(
         model_id="happyhorse-1.1-i2v",
         provider="dashscope",
@@ -49,44 +40,12 @@ VIDEO_MODELS: dict[str, ModelSpec] = {
         cost_tier="medium",
         priority=30,
     ),
-    "wan2.7-i2v": ModelSpec(
-        model_id="wan2.7-i2v",
-        provider="dashscope",
-        capability="i2v",
-        supports_refs=True,
-        max_refs=1,
-        cost_tier="high",
-        priority=40,
-    ),
     "happyhorse-1.1-t2v": ModelSpec(
         model_id="happyhorse-1.1-t2v",
         provider="dashscope",
         capability="t2v",
         cost_tier="medium",
         priority=50,
-    ),
-    "wan2.7-t2v": ModelSpec(
-        model_id="wan2.7-t2v",
-        provider="dashscope",
-        capability="t2v",
-        cost_tier="high",
-        priority=60,
-    ),
-    "alibaba/wan2.7-i2v": ModelSpec(
-        model_id="alibaba/wan2.7-i2v",
-        provider="aiml",
-        capability="i2v",
-        supports_refs=True,
-        max_refs=1,
-        cost_tier="high",
-        priority=90,
-    ),
-    "alibaba/wan2.7-t2v": ModelSpec(
-        model_id="alibaba/wan2.7-t2v",
-        provider="aiml",
-        capability="t2v",
-        cost_tier="high",
-        priority=100,
     ),
 }
 
@@ -113,8 +72,6 @@ TEXT_MODELS: dict[str, ModelSpec] = {
 
 
 def _is_available(spec: ModelSpec, provider_status: dict[str, Any]) -> bool:
-    if spec.provider == "aiml":
-        return bool(os.environ.get("AIML_API_KEY", ""))
     if spec.provider == "dashscope":
         return bool(os.environ.get("DASHSCOPE_API_KEY", ""))
     return True

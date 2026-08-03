@@ -1,7 +1,7 @@
 # Dysentry — AI Video Production App
 
 ## Overview
-Dysentry is a chat-first AI video production platform. Users describe a story, the AI (Qwen) generates a structured outline with scenes, and the pipeline renders each scene as a short video clip via DashScope/Alibaba Cloud. The final result is an assembled video episode.
+Dysentry is a chat-first AI video production platform. Users describe a story, the model brain generates a structured outline with scenes, and the pipeline renders each scene as a short video clip through the GenBlaze provider adapters. The final result is an assembled video episode.
 
 ## Architecture
 
@@ -12,7 +12,7 @@ Dysentry is a chat-first AI video production platform. Users describe a story, t
 | Media Worker | Python worker process | — |
 | Database | CockroachDB (via `COCKROACHDB_URL`) | — |
 | Queue / Cache | Redis (via `REDIS_URL`) | — |
-| AI | Qwen / DashScope (`DASHSCOPE_API_KEY`), TokenRouter | — |
+| AI | Qwen/HappyHorse through the DashScope GenBlaze adapter, model brain via TokenRouter/OpenRouter-compatible API | — |
 | Storage | Backblaze B2 (`B2_*` keys) | — |
 
 ## Directory Structure
@@ -46,10 +46,10 @@ Three workflows must all be running:
 
 ## Story Production Flow
 1. User enters a prompt → `POST /pipeline/stories` (status: `draft`)
-2. AI generates outline using Qwen — episodes and scenes created automatically
+2. Model brain generates outline — episodes and scenes created automatically
 3. User approves outline → `PUT /pipeline/stories/{id}/approve-outline` (status: `approved`)
 4. User launches generation → `POST /pipeline/stories/{id}/generate` (status: `generating`)
-5. Worker picks up jobs, renders each scene as ~3s video via DashScope Wan model
+5. Worker picks up jobs, renders each scene as a 2–3s video through GenBlaze
 6. Status flows: `generating` → `checkpoint_review` → `completed`
 
 ## Frontend Proxy
@@ -63,5 +63,6 @@ Vite proxies `/pipeline/*` → `http://127.0.0.1:8000` so the frontend never har
 
 ## User Preferences
 - Keep video generation short (2–3 seconds per clip) to conserve AI credits
-- Use Qwen (DashScope) as the primary AI provider
+- Use Qwen/HappyHorse through the DashScope GenBlaze adapter for video; Wan models are reserved for the separate Novita adapter
+- AIML is disabled until its API is restored
 - Dark theme UI (#0a0a0a background, #dfff1e accent color)

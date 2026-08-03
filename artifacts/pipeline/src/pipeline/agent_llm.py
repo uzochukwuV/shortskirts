@@ -15,9 +15,16 @@ from dataclasses import dataclass, field
 import httpx
 
 
-TOKENROUTER_API_URL = os.getenv("TOKENROUTER_API_URL", "https://api.tokenrouter.com/v1")
-TOKENROUTER_MODEL = os.getenv("TOKENROUTER_MODEL", "moonshotai/kimi-k3-free")
-TOKENROUTER_API_KEY = os.getenv("TOKENROUTER_API_KEY", "")
+_using_openrouter = bool(os.getenv("OPENROUTER_API_KEY"))
+TOKENROUTER_API_URL = os.getenv(
+    "OPENROUTER_API_URL" if _using_openrouter else "TOKENROUTER_API_URL",
+    "https://openrouter.ai/api/v1" if _using_openrouter else "https://api.tokenrouter.com/v1",
+)
+TOKENROUTER_MODEL = os.getenv(
+    "OPENROUTER_MODEL" if _using_openrouter else "TOKENROUTER_MODEL",
+    "openai/gpt-4o-mini" if _using_openrouter else "moonshotai/kimi-k3-free",
+)
+TOKENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") or os.getenv("TOKENROUTER_API_KEY", "")
 
 
 @dataclass

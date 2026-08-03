@@ -116,25 +116,6 @@ STEP_POLICIES = {
         base_delay_seconds=_env_float("DASHSCOPE_VIDEO_POLL_BACKOFF_BASE", 5.0),
         max_delay_seconds=_env_float("DASHSCOPE_VIDEO_POLL_BACKOFF_MAX", 30.0),
     ),
-    "aiml_video_submit": StepPolicy(
-        name="aiml_video_submit",
-        provider="aiml",
-        rate_limit=int(os.getenv("AIML_VIDEO_SUBMIT_RATE_LIMIT", "2")),
-        rate_window_seconds=int(os.getenv("AIML_VIDEO_RATE_WINDOW", "60")),
-        max_attempts=int(os.getenv("AIML_VIDEO_SUBMIT_MAX_ATTEMPTS", "3")),
-        base_delay_seconds=_env_float("AIML_VIDEO_BACKOFF_BASE", 10.0),
-        max_delay_seconds=_env_float("AIML_VIDEO_BACKOFF_MAX", 120.0),
-        estimated_cost_usd=_env_float("AIML_VIDEO_COST", 0.25),
-    ),
-    "aiml_video_poll": StepPolicy(
-        name="aiml_video_poll",
-        provider="aiml",
-        rate_limit=int(os.getenv("AIML_VIDEO_POLL_RATE_LIMIT", "24")),
-        rate_window_seconds=int(os.getenv("AIML_VIDEO_RATE_WINDOW", "60")),
-        max_attempts=int(os.getenv("AIML_VIDEO_POLL_MAX_ATTEMPTS", "3")),
-        base_delay_seconds=_env_float("AIML_VIDEO_POLL_BACKOFF_BASE", 5.0),
-        max_delay_seconds=_env_float("AIML_VIDEO_POLL_BACKOFF_MAX", 30.0),
-    ),
 }
 
 

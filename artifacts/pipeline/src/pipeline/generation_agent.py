@@ -4,8 +4,9 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from pipeline.model_registry import build_video_attempts
 from pipeline.pipeline_runtime import finish_pipeline_step, start_pipeline_step
+from pipeline.scene_gen import GENBLAZE_PROVIDER_TYPES, _genblaze_model
+from pipeline.providers.provider_router import get_router
 
 
 class AgentScenePlan(BaseModel):
@@ -16,6 +17,60 @@ class AgentScenePlan(BaseModel):
     handoff_reason: Optional[str] = None
     user_message: Optional[str] = None
     reason: str = ""
+
+
+def _build_genblaze_attempts(
+    *,
+    reference_count: int,
+    pipeline_config: dict[str, Any],
+    preferred_provider: str | None,
+) -> list[dict[str, Any]]:
+    """Build attempts from the live GenBlaze adapters only.
+
+    This intentionally does not consult the legacy model registry. Existing
+    stories may contain older workflow state, but that state must not be able
+    to re-enable AIML or bypass the GenBlaze route.
+    """
+    router = get_router()
+    available = {
+        provider.value
+        for provider in router.available_providers
+        if provider.value in GENBLAZE_PROVIDER_TYPES
+    }
+    preferences = pipeline_config.get("providers", {}).get("video_preference") or []
+    order: list[str] = []
+    for provider in [preferred_provider, *preferences, *sorted(available)]:
+        normalized = str(provider or "").lower()
+        if normalized in available and normalized not in order:
+            order.append(normalized)
+
+    attempts: list[dict[str, Any]] = []
+    for provider in order:
+        if reference_count >= 2 and provider in {"dashscope", "novita"}:
+            capability = "r2v"
+            max_refs = 9 if provider == "dashscope" else 4
+        elif reference_count >= 1 and provider in {"dashscope", "novita", "veo3"}:
+            capability = "i2v"
+            max_refs = 1
+        else:
+            capability = "t2v"
+            max_refs = 0
+        attempts.append(
+            {
+                "provider": provider,
+                "path": "genblaze",
+                "model": _genblaze_model(provider, reference_count),
+                "capability": capability,
+                "max_refs": max_refs,
+                "supports_ratio": True,
+                "max_duration_seconds": 3,
+                "reason": (
+                    f"Use GenBlaze {capability} through the configured "
+                    f"{provider} adapter."
+                ),
+            }
+        )
+    return attempts
 
 
 async def plan_scene_video(
@@ -45,9 +100,8 @@ async def plan_scene_video(
             "provider_preferences": pipeline_config.get("providers", {}).get("video_preference"),
         },
     )
-    attempts = build_video_attempts(
+    attempts = _build_genblaze_attempts(
         reference_count=reference_count,
-        provider_status=provider_status,
         pipeline_config=pipeline_config,
         preferred_provider=preferred_provider,
     )

@@ -2,6 +2,7 @@ modules = ["python-3.11", "nodejs-20", "web", "bash"]
 
 [nix]
 channel = "stable-25_05"
+packages = ["cargo", "ffmpeg-full", "freetype", "imagemagickBig", "lcms2", "libiconv", "libimagequant", "libjpeg", "libtiff", "libwebp", "libxcrypt", "openjpeg", "openssl", "pkg-config", "postgresql", "rustc", "tcl", "tk", "zlib"]
 
 [agent]
 expertMode = true

@@ -1,0 +1,1 @@
+- [Persisted workflow state](persisted-workflow-state.md) — normalize imported story settings before provider selection so legacy configuration cannot reactivate disabled providers.

@@ -100,17 +100,26 @@ def _build_fallback_chain(
     if requested_kind == RequestedMediaKind.image:
         image_preference = pipeline_config.get("providers", {}).get("image_preference") or []
         if image_preference:
-            return list(dict.fromkeys([str(item) for item in image_preference if item] + ["qwen-image-plus", "aiml-image"]))
+            return list(dict.fromkeys([str(item) for item in image_preference if item] + ["qwen-image-plus"]))
         return [
             "qwen-image-edit-plus",
             "qwen-image-plus",
             "wan2.7-image-pro",
-            "aiml-image",
         ]
 
-    # Video generation is intentionally Qwen/DashScope-only. Availability is
-    # configuration-only, so routing must not submit a paid provider probe.
-    return ["dashscope"] if os.environ.get("DASHSCOPE_API_KEY", "").strip() else []
+    # Video generation runs through GenBlaze adapters. AIML is intentionally
+    # excluded because its video API is currently unavailable.
+    preferences = pipeline_config.get("providers", {}).get("video_preference") or []
+    configured = {
+        "dashscope": "DASHSCOPE_API_KEY",
+        "novita": "NOVITA_API_KEY",
+        "replicate": "REPLICATE_API_KEY",
+        "veo3": "VEO3_API_KEY",
+    }
+    return [
+        provider for provider in preferences
+        if provider in configured and os.environ.get(configured[provider], "").strip()
+    ]
 
 
 async def _langchain_decision(
@@ -123,15 +132,28 @@ async def _langchain_decision(
     if ChatOpenAI is None or ChatPromptTemplate is None:
         return None
 
-    api_key = os.environ.get("DASHSCOPE_API_KEY", "")
+    api_key = (
+        os.environ.get("OPENROUTER_API_KEY")
+        or os.environ.get("TOKENROUTER_API_KEY")
+        or os.environ.get("DASHSCOPE_API_KEY", "")
+    )
     if not api_key:
         return None
 
     base_url = os.environ.get(
-        "GENERATION_COORDINATOR_BASE_URL",
-        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "GENERATION_COORDINATOR_BASE_URL"
+        if os.environ.get("OPENROUTER_API_KEY")
+        else "TOKENROUTER_API_URL",
+        "https://openrouter.ai/api/v1"
+        if os.environ.get("OPENROUTER_API_KEY")
+        else "https://api.tokenrouter.com/v1",
     )
-    model = os.environ.get("GENERATION_COORDINATOR_MODEL", "qwen-max")
+    model = os.environ.get("GENERATION_COORDINATOR_MODEL") or os.environ.get(
+        "OPENROUTER_MODEL" if os.environ.get("OPENROUTER_API_KEY") else "TOKENROUTER_MODEL",
+        "openai/gpt-4o-mini"
+        if os.environ.get("OPENROUTER_API_KEY")
+        else "moonshotai/kimi-k3-free",
+    )
 
     llm = ChatOpenAI(
         api_key=api_key,
@@ -258,10 +280,14 @@ async def build_generation_plan(
             user_message = llm_decision.get("user_message")
 
     if selected_media_kind == "video":
-        wan = provider_status.get("wan", {}) if isinstance(provider_status, dict) else {}
-        has_video_provider = bool(
-            wan.get("i2v", {}).get("available")
-            or wan.get("t2v", {}).get("available")
+        configured_video_keys = (
+            "DASHSCOPE_API_KEY",
+            "NOVITA_API_KEY",
+            "REPLICATE_API_KEY",
+            "VEO3_API_KEY",
+        )
+        has_video_provider = any(
+            os.environ.get(key, "").strip() for key in configured_video_keys
         )
         if not has_video_provider:
             should_handoff = True
@@ -286,16 +312,32 @@ async def build_generation_plan(
         selected_provider_hint = (workflow_state.get("generation_coordinator") or {}).get("preferred_video_provider")
         if not selected_provider_hint:
             provider_preference = pipeline_config.get("providers", {}).get("video_preference") or []
+            configured_provider_keys = {
+                "dashscope": "DASHSCOPE_API_KEY",
+                "novita": "NOVITA_API_KEY",
+                "replicate": "REPLICATE_API_KEY",
+                "veo3": "VEO3_API_KEY",
+            }
             for preferred in provider_preference:
-                if preferred == "dashscope" and os.environ.get("DASHSCOPE_API_KEY", ""):
-                    selected_provider_hint = "dashscope"
+                env_key = configured_provider_keys.get(preferred)
+                if env_key and os.environ.get(env_key, "").strip():
+                    selected_provider_hint = preferred
                     break
         if not selected_provider_hint:
-            wan = provider_status.get("wan", {}) if isinstance(provider_status, dict) else {}
-            if wan.get("i2v", {}).get("available") or wan.get("t2v", {}).get("available"):
-                selected_provider_hint = "dashscope"
-            else:
-                selected_provider_hint = None
+            configured_provider_keys = {
+                "dashscope": "DASHSCOPE_API_KEY",
+                "novita": "NOVITA_API_KEY",
+                "replicate": "REPLICATE_API_KEY",
+                "veo3": "VEO3_API_KEY",
+            }
+            selected_provider_hint = next(
+                (
+                    provider
+                    for provider, env_key in configured_provider_keys.items()
+                    if os.environ.get(env_key, "").strip()
+                ),
+                None,
+            )
     elif selected_media_kind == "image":
         selected_provider_hint = "qwen"
 

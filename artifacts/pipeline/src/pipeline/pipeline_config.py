@@ -19,15 +19,18 @@ FEATURE_FLAG_DEFAULTS: dict[str, bool] = {
     "timeline_assembly": False,      # Enable AI-powered timeline assembly
     "agent_chat": False,            # Enable conversational agent interface
     "parallel_generation": True,     # Enable parallel scene generation (BUG-7 fix)
-    "use_genblaze": False,          # Use GenBlaze SDK instead of legacy providers
+    "use_genblaze": True,           # Route media through the GenBlaze adapters
 }
 
 
 # GenBlaze provider mappings
 # Maps Dysentry provider names to GenBlaze models
 GENBLaze_VIDEO_MODELS = {
-    "dashscope": "Kling-Text2Video-V2.1-Master",
-    "aiml": "Kling-Text2Video-V2.1-Master",
+    "dashscope": "happyhorse-1.1-t2v",
+    "qwen": "happyhorse-1.1-t2v",
+    "novita": "wan2.7-t2v",
+    "replicate": "luosi-npn/ltxv-hunyuan-t2v",
+    "veo3": "veo3",
     "sora": "sora-2",
     "veo": "veo3",
     "kling": "Kling-Text2Video-V2.1-Master",
@@ -51,7 +54,7 @@ DEFAULT_PIPELINE_CONFIG: dict[str, Any] = {
     "media": {
         "kind": "auto",
         "ratio": "16:9",
-        "duration_seconds": 5,
+        "duration_seconds": 3,
         "quality": "standard",
     },
     "approvals": {
@@ -60,7 +63,7 @@ DEFAULT_PIPELINE_CONFIG: dict[str, Any] = {
         "publish_requires_approval": True,
     },
     "providers": {
-        "video_preference": ["dashscope", "aiml"],
+        "video_preference": ["dashscope", "novita", "replicate", "veo3"],
         "image_preference": ["qwen-image-edit-plus", "qwen-image-plus"],
         "allow_fallback_to_image": False,
     },
@@ -124,16 +127,21 @@ def normalize_pipeline_config(
         media["ratio"] = os.getenv("VIDEO_DEFAULT_RATIO", "16:9")
 
     try:
-        duration = int(media.get("duration_seconds") or 5)
+        duration = int(media.get("duration_seconds") or 3)
     except Exception:
-        duration = 5
-    media["duration_seconds"] = max(3, min(duration, 10))
+        duration = 3
+    # Keep every render within the project's credit-safe 2–3 second window.
+    media["duration_seconds"] = max(2, min(duration, 3))
 
     providers = normalized.setdefault("providers", {})
     video_pref = providers.get("video_preference")
     if not isinstance(video_pref, list) or not video_pref:
-        video_pref = ["dashscope", "aiml"]
-    providers["video_preference"] = [str(provider) for provider in video_pref if provider] or ["dashscope", "aiml"]
+        video_pref = ["dashscope", "novita", "replicate", "veo3"]
+    providers["video_preference"] = [
+        str(provider)
+        for provider in video_pref
+        if provider and str(provider).lower() != "aiml"
+    ] or ["dashscope", "novita", "replicate", "veo3"]
 
     image_pref = providers.get("image_preference")
     if not isinstance(image_pref, list) or not image_pref:

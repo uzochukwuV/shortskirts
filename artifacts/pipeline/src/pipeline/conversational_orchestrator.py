@@ -45,7 +45,7 @@ from pipeline.catalog import ContinuityState, build_scene_context, inject_contin
 from pipeline.media_tools import extract_last_frame_png, concatenate_video_files
 from storage.b2 import upload_bytes, download_url_to_bytes, build_key
 from genblaze_core.models.step import Step
-from genblaze_core import Modality an api e
+from genblaze_core import Modality
 
 
 # ─── Data Models ────────────────────────────────────────────────────────────────

@@ -10,7 +10,7 @@ import httpx
 from job_queue import get_redis
 from pipeline.provider_policy import run_provider_step
 
-WAN_VIDEO_BASE = "https://dashscope-intl.aliyuncs.com/api/v1"
+QWEN_VIDEO_BASE = "https://dashscope-intl.aliyuncs.com/api/v1"
 WAN_SAMPLE_IMAGE_URL = "https://help-static-aliyun-doc.aliyuncs.com/file-manage-files/zh-CN/20250925/thtclx/input1.png"
 COVER_SAMPLE_IMAGE_URL = "https://help-static-aliyun-doc.aliyuncs.com/file-manage-files/zh-CN/20260424/mvzfud/hh-v2v-girl.jpg"
 CACHE_KEY = "storyforge:provider_status:v1"
@@ -61,7 +61,7 @@ async def _store_cached_status(payload: dict[str, Any]) -> None:
     await client.set(CACHE_KEY, json.dumps(payload), ex=CACHE_TTL_SECONDS)
 
 
-async def _probe_wan_t2v() -> dict[str, Any]:
+async def _probe_qwen_t2v() -> dict[str, Any]:
     dashscope_key = os.environ.get("DASHSCOPE_API_KEY", "")
     if not dashscope_key:
         return {
@@ -70,7 +70,7 @@ async def _probe_wan_t2v() -> dict[str, Any]:
             "error": "DASHSCOPE_API_KEY is missing",
         }
 
-    endpoint = f"{WAN_VIDEO_BASE}/services/aigc/video-generation/video-synthesis"
+    endpoint = f"{QWEN_VIDEO_BASE}/services/aigc/video-generation/video-synthesis"
     payload = {
         "model": "happyhorse-1.1-t2v",
         "input": {"prompt": "Probe access for Wan text-to-video"},
@@ -102,7 +102,7 @@ async def _probe_wan_t2v() -> dict[str, Any]:
         return details
 
 
-async def _probe_wan_i2v() -> dict[str, Any]:
+async def _probe_qwen_i2v() -> dict[str, Any]:
     dashscope_key = os.environ.get("DASHSCOPE_API_KEY", "")
     if not dashscope_key:
         return {
@@ -111,7 +111,7 @@ async def _probe_wan_i2v() -> dict[str, Any]:
             "error": "DASHSCOPE_API_KEY is missing",
         }
 
-    endpoint = f"{WAN_VIDEO_BASE}/services/aigc/video-generation/video-synthesis"
+    endpoint = f"{QWEN_VIDEO_BASE}/services/aigc/video-generation/video-synthesis"
     payload = {
         "model": "happyhorse-1.1-i2v",
         "input": {
@@ -146,7 +146,7 @@ async def _probe_wan_i2v() -> dict[str, Any]:
         return details
 
 
-async def _probe_wan_r2v() -> dict[str, Any]:
+async def _probe_qwen_r2v() -> dict[str, Any]:
     dashscope_key = os.environ.get("DASHSCOPE_API_KEY", "")
     if not dashscope_key:
         return {
@@ -155,7 +155,7 @@ async def _probe_wan_r2v() -> dict[str, Any]:
             "error": "DASHSCOPE_API_KEY is missing",
         }
 
-    endpoint = f"{WAN_VIDEO_BASE}/services/aigc/video-generation/video-synthesis"
+    endpoint = f"{QWEN_VIDEO_BASE}/services/aigc/video-generation/video-synthesis"
     payload = {
         "model": "happyhorse-1.1-r2v",
         "input": {
@@ -193,14 +193,29 @@ async def _probe_wan_r2v() -> dict[str, Any]:
 async def get_provider_status(force_refresh: bool = False) -> dict[str, Any]:
     """Return Qwen/DashScope configuration status without submitting billable probes."""
     configured = bool(os.environ.get("DASHSCOPE_API_KEY", "").strip())
-    model = os.environ.get("DASHSCOPE_VIDEO_MODEL", "wan2.1-vace-plus")
+    model = os.environ.get("DASHSCOPE_T2V_MODEL", "happyhorse-1.1-t2v")
+    models = {
+        "t2v": model,
+        "i2v": os.environ.get("DASHSCOPE_I2V_MODEL", "happyhorse-1.1-i2v"),
+        "r2v": os.environ.get("DASHSCOPE_R2V_MODEL", "happyhorse-1.1-r2v"),
+    }
     error = None if configured else "DASHSCOPE_API_KEY is missing"
-    capability = {"available": configured, "model": model, "mode": "configuration_only", "error": error}
+    capability = {
+        mode: {
+            "available": configured,
+            "provider": "qwen",
+            "adapter": "dashscope",
+            "model": selected_model,
+            "mode": "configuration_only",
+            "error": error,
+        }
+        for mode, selected_model in models.items()
+    }
     return {
         "checked_at": _utc_now(),
         "mode": "configuration_only",
-        "wan": {"t2v": dict(capability), "i2v": dict(capability), "r2v": dict(capability)},
-        "recommended_mode": "wan_i2v" if configured else "narrated_image_story",
+        "qwen": capability,
+        "recommended_mode": "qwen_i2v" if configured else "narrated_image_story",
     }
 
 async def _post_json(http: httpx.AsyncClient, url: str, headers: dict, payload: dict):

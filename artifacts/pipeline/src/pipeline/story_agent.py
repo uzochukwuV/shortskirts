@@ -6,88 +6,53 @@ from pipeline.provider_policy import run_provider_step
 
 # ─── Clients ──────────────────────────────────────────────────────────────────
 
-_qwen_client: AsyncOpenAI | None = None
-_aiml_client: AsyncOpenAI | None = None
+_brain_client: AsyncOpenAI | None = None
 
-QWEN_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-AIML_BASE_URL = "https://api.aimlapi.com/v1"
-
-QWEN_LLM_MODELS = ["qwen-max", "qwen-plus", "qwen-turbo"]
-AIML_LLM_MODELS = ["Qwen/Qwen2.5-7B-Instruct-Turbo", "gpt-4o-mini"]
-
-
-def get_qwen_client() -> AsyncOpenAI:
-    global _qwen_client
-    if _qwen_client is None:
-        _qwen_client = AsyncOpenAI(
-            api_key=os.environ["DASHSCOPE_API_KEY"],
-            base_url=QWEN_BASE_URL,
-        )
-    return _qwen_client
-
-
-def get_aiml_client() -> AsyncOpenAI:
-    global _aiml_client
-    if _aiml_client is None:
-        _aiml_client = AsyncOpenAI(
-            api_key=os.environ.get("AIML_API_KEY", ""),
-            base_url=AIML_BASE_URL,
-        )
-    return _aiml_client
+_using_openrouter = bool(os.getenv("OPENROUTER_API_KEY"))
+OPENROUTER_BASE_URL = os.getenv(
+    "OPENROUTER_API_URL" if _using_openrouter else "TOKENROUTER_API_URL",
+    "https://openrouter.ai/api/v1" if _using_openrouter else "https://api.tokenrouter.com/v1",
+)
+OPENROUTER_MODEL = os.getenv(
+    "OPENROUTER_MODEL" if _using_openrouter else "TOKENROUTER_MODEL",
+    "openai/gpt-4o-mini" if _using_openrouter else "moonshotai/kimi-k3-free",
+)
+MODEL_BRAIN_API_KEY = os.getenv("OPENROUTER_API_KEY") or os.getenv("TOKENROUTER_API_KEY", "")
 
 
 def get_client() -> AsyncOpenAI:
-    return get_qwen_client()
+    global _brain_client
+    if _brain_client is None:
+        if not MODEL_BRAIN_API_KEY:
+            raise RuntimeError("No model-brain API key configured")
+        _brain_client = AsyncOpenAI(
+            api_key=MODEL_BRAIN_API_KEY,
+            base_url=OPENROUTER_BASE_URL,
+        )
+    return _brain_client
 
 
 async def _chat(messages: list, temperature: float = 0.8, max_tokens: int = 4096) -> str:
     last_err = None
-    qwen = get_qwen_client()
-    for model in QWEN_LLM_MODELS:
-        try:
-            resp = await run_provider_step(
-                "qwen_llm",
-                f"llm:{model}",
-                lambda: qwen.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                ),
-                extra={"model": model},
-            )
-            content = resp.choices[0].message.content
-            if content:
-                print(f"[story_agent] Used Qwen Cloud: {model}")
-                return content.strip()
-        except Exception as e:
-            print(f"[story_agent] Qwen {model} failed: {str(e)[:80]}")
-            last_err = e
-            continue
-
-    aiml_key = os.environ.get("AIML_API_KEY", "")
-    if aiml_key:
-        aiml = get_aiml_client()
-        for model in AIML_LLM_MODELS:
-            try:
-                resp = await run_provider_step(
-                    "aiml_llm",
-                    f"llm:{model}",
-                    lambda: aiml.chat.completions.create(
-                        model=model,
-                        messages=messages,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                    ),
-                    extra={"model": model},
-                )
-                content = resp.choices[0].message.content
-                if content:
-                    print(f"[story_agent] AIML fallback: {model}")
-                    return content.strip()
-            except Exception as e:
-                last_err = e
-                continue
+    client = get_client()
+    try:
+        resp = await run_provider_step(
+            "qwen_llm",
+            f"llm:{OPENROUTER_MODEL}",
+            lambda: client.chat.completions.create(
+                model=OPENROUTER_MODEL,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            ),
+            extra={"model": OPENROUTER_MODEL, "provider": "model_brain"},
+        )
+        content = resp.choices[0].message.content
+        if content:
+            print(f"[story_agent] Used model brain: {OPENROUTER_MODEL}")
+            return content.strip()
+    except Exception as e:
+        last_err = e
 
     raise RuntimeError(f"All LLM models exhausted. Last error: {last_err}")
 

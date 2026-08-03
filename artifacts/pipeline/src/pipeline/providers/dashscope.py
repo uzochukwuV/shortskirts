@@ -4,7 +4,7 @@ GenBlaze DashScope/Qwen Provider
 A custom GenBlaze provider adapter for Alibaba DashScope API (Qwen/Wan video and image models).
 
 This provider enables GenBlaze Pipeline API integration with:
-- Video: wan2.7-i2v, wan2.7-t2v, wan2.7-r2v, happyhorse models
+    - Video: happyhorse-1.1-i2v, happyhorse-1.1-t2v, happyhorse-1.1-r2v
 - Image: qwen-image, wanx2.1-t2i-turbo, wan2.7-image-pro
 """
 
@@ -109,18 +109,6 @@ class DashScopeVideoProvider(DashScopeBase):
 
     @classmethod
     def create_registry(cls) -> ModelRegistry:
-        wan_family = ModelFamily(
-            name="dashscope-wan",
-            pattern=re.compile(r"^wan\d+\.\d+-(?:t2v|i2v|r2v)$"),
-            spec_template=ModelSpec(
-                model_id="*",
-                modality=Modality.VIDEO,
-                input_mapping=route_images(slots=("image_url",)),
-            ),
-            description="Alibaba Wan video family",
-            example_slugs=("wan2.7-t2v", "wan2.7-i2v", "wan2.7-r2v"),
-        )
-        
         happyhorse_family = ModelFamily(
             name="dashscope-happyhorse",
             pattern=re.compile(r"^happyhorse-\d+\.\d+-(?:t2v|i2v|r2v)$"),
@@ -133,7 +121,7 @@ class DashScopeVideoProvider(DashScopeBase):
             example_slugs=("happyhorse-1.1-t2v", "happyhorse-1.1-i2v", "happyhorse-1.1-r2v"),
         )
         
-        return ModelRegistry(provider_families=(wan_family, happyhorse_family))
+        return ModelRegistry(provider_families=(happyhorse_family,))
 
     def get_capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
