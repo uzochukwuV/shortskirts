@@ -493,11 +493,15 @@ async def _generate_single_scene_internal(
     
     try:
         async with pipeline_context_binding(run_id=run_id, step_id=render_step_id):
+            episode_plan_context = _json_loads(story.get("episode_plan") or {})
+            if not isinstance(episode_plan_context, dict):
+                episode_plan_context = {}
+
             result, generation_plan = await generate_with_coordinator(
                 story=story,
                 episode_id=str(ep_id),
                 scene=scene_plan,
-                story_context=story.get("episode_plan", {}),
+                story_context=episode_plan_context,
                 character_refs=char_refs,
                 previous_exit_frame_url=previous_exit_frame,
                 previous_scene_image_url=previous_exit_frame,

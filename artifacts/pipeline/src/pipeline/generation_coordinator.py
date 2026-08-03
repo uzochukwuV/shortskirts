@@ -8,6 +8,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 from pipeline.pipeline_config import normalize_pipeline_config
+from pipeline.scene_gen import generate_scene_clip
 
 try:
     from langchain_core.prompts import ChatPromptTemplate
@@ -390,7 +391,6 @@ async def generate_with_coordinator(
 ) -> tuple[dict[str, Any], GenerationPlan]:
     from pipeline.provider_status import get_provider_status
     from pipeline.narrated_image_story import generate_narrated_scene_image
-    from pipeline.scene_gen import generate_scene_clip
 
     provider_status = await get_provider_status()
     workflow_state = _workflow_state(story)

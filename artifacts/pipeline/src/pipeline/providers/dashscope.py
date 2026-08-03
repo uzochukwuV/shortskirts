@@ -192,10 +192,10 @@ class DashScopeVideoProvider(DashScopeBase):
         
         resolution = step.params.get("resolution", "1080P")
         ratio = step.params.get("ratio", "16:9")
-        # Keep test renders cheap. Wan video requests use the provider-safe 2s minimum.
-        test_cap = max(2, int(os.environ.get("DASHSCOPE_TEST_MAX_DURATION_SECONDS", "2")))
+        # Keep test renders cheap. HappyHorse video requests require at least 3s.
+        test_cap = max(3, int(os.environ.get("DASHSCOPE_TEST_MAX_DURATION_SECONDS", "3")))
         requested_duration = int(step.params.get("duration", test_cap))
-        duration = max(2, min(requested_duration, test_cap, 8))
+        duration = max(3, min(requested_duration, test_cap, 8))
         
         # Enhanced quality parameters
         seed = step.params.get("seed")

@@ -57,12 +57,12 @@ Vite proxies `/pipeline/*` → `http://127.0.0.1:8000` so the frontend never har
 
 ## Key Decisions
 - No Base44 SDK — completely removed; auth is JWT-based via custom `authService` + `AuthContext`
-- Video duration kept to 2–3 seconds per scene to conserve generation credits
+- Video duration kept to the provider-safe 3 seconds per scene to conserve generation credits
 - `react`, `react-dom`, `react-router-dom` are deduplicated via `vite.config.js resolve.dedupe`
 - Backend CORS allows all `.replit.dev` and `.repl.co` domains via regex
 
 ## User Preferences
-- Keep video generation short (2–3 seconds per clip) to conserve AI credits
+- Keep video generation short (3 seconds per clip; HappyHorse requires at least 3 seconds) to conserve AI credits
 - Use Qwen/HappyHorse through the DashScope GenBlaze adapter for video; Wan models are reserved for the separate Novita adapter
 - AIML is disabled until its API is restored
 - Dark theme UI (#0a0a0a background, #dfff1e accent color)

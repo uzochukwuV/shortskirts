@@ -40,8 +40,8 @@ NOVITA_BASE_URL = "https://api.novita.ai"
 
 # Max duration — cap at 3 s to conserve credits (user preference)
 MAX_DURATION_SECONDS = int(os.getenv("MAX_VIDEO_DURATION_SECONDS", "3"))
-# DashScope minimum is 2 s
-MIN_DURATION_SECONDS = 2
+# HappyHorse/DashScope requires at least 3 seconds.
+MIN_DURATION_SECONDS = 3
 
 POLL_INTERVAL = 8  # seconds between status polls
 MAX_POLL_SECONDS = 600  # 10 minutes per attempt

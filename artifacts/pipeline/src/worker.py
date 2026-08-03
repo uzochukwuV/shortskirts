@@ -1,12 +1,21 @@
 import asyncio
 import json
 import os
+import sys
 from dotenv import load_dotenv
 
 import time
 import uuid
 from datetime import datetime, timezone
 from contextlib import suppress
+
+# The worker imports scene generation lazily after several long-running
+# startup steps. Pin the source directory explicitly so deferred imports
+# resolve the same package that `python -m uvicorn` and local checks use.
+SOURCE_DIR = os.path.dirname(os.path.abspath(__file__))
+if SOURCE_DIR not in sys.path:
+    sys.path.insert(0, SOURCE_DIR)
+
 from pipeline.metrics import record_pipeline_metric
 # Load .env from pipeline root
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")

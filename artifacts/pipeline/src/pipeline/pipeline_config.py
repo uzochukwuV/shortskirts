@@ -131,7 +131,7 @@ def normalize_pipeline_config(
     except Exception:
         duration = 3
     # Keep every render within the project's credit-safe 2–3 second window.
-    media["duration_seconds"] = max(2, min(duration, 3))
+    media["duration_seconds"] = max(3, min(duration, 3))
 
     providers = normalized.setdefault("providers", {})
     video_pref = providers.get("video_preference")
