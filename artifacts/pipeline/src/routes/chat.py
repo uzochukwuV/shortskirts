@@ -62,6 +62,11 @@ class ChatRequest(BaseModel):
     conversation_id: Optional[str] = Field(None, description="Continue existing conversation")
     story_id: Optional[str] = Field(None, description="Associated story ID")
     system_context: Optional[str] = Field(None, description="Additional system context")
+    title: Optional[str] = Field(None, description="Story title to use when creating a draft")
+    brief: Optional[str] = Field(None, description="Short project brief")
+    duration_seconds: Optional[int] = Field(None, ge=1, le=60, description="Target duration in seconds")
+    frame_ratio: Optional[str] = Field(None, description="Aspect ratio such as 16:9 or 9:16")
+    create_story: bool = Field(default=False, description="Create a new draft story from the brief")
 
 
 class ChatResponse(BaseModel):
@@ -183,7 +188,10 @@ def get_tool_definitions() -> list[dict]:
                         "title": {"type": "string", "description": "Story title"},
                         "description": {"type": "string", "description": "Detailed description of the story"},
                         "style": {"type": "string", "description": "Visual style (cinematic, anime, realistic)", "default": "cinematic"},
-                        "num_scenes": {"type": "integer", "description": "Number of scenes (default 5)", "default": 5}
+                        "num_scenes": {"type": "integer", "description": "Number of scenes (default 5)", "default": 5},
+                        "duration_seconds": {"type": "integer", "description": "Target duration in seconds", "default": 5},
+                        "frame_ratio": {"type": "string", "description": "Aspect ratio such as 16:9 or 9:16", "default": "16:9"},
+                        "workflow_type": {"type": "string", "description": "Workflow type", "default": "brand_campaign"}
                     },
                     "required": ["title", "description"]
                 }
@@ -208,10 +216,7 @@ def get_tool_definitions() -> list[dict]:
             "function": {
                 "name": "list_stories",
                 "description": "List all stories for the current user.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {}
-                }
+                "parameters": {"type": "object", "properties": {}}
             }
         },
         {
@@ -377,12 +382,11 @@ def get_tool_definitions() -> list[dict]:
             "type": "function",
             "function": {
                 "name": "regenerate_outline",
-                "description": "Regenerate the story outline/plan.",
+                "description": "Regenerate the story outline from the brief.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "story_id": {"type": "string", "description": "Story ID"},
-                        "new_prompt": {"type": "string", "description": "New story description"}
+                        "story_id": {"type": "string", "description": "Story ID"}
                     },
                     "required": ["story_id"]
                 }
@@ -407,7 +411,7 @@ def get_tool_definitions() -> list[dict]:
     ]
 
 
-# ─── Tool Implementations ─────────────────────────────────────────────────────
+# ─── Tool Implementations ───
 
 async def _tool_create_story(params: dict, user_id: str) -> dict:
     """Create a new story."""
