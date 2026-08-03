@@ -1,1 +1,2 @@
 - [Persisted workflow state](persisted-workflow-state.md) — normalize imported story settings before provider selection so legacy configuration cannot reactivate disabled providers.
+- [Qwen video fallback](qwen-video-fallback.md) — DashScope/Qwen tries HappyHorse R2V first, then Wan R2V with the exact dated model identifier.

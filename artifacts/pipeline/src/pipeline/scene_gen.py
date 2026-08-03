@@ -37,6 +37,10 @@ DASHSCOPE_BASE_URL = os.getenv(
     "DASHSCOPE_BASE_URL", "https://dashscope-intl.aliyuncs.com/api/v1"
 )
 NOVITA_BASE_URL = "https://api.novita.ai"
+QWEN_R2V_FALLBACK_MODEL = os.getenv(
+    "QWEN_R2V_FALLBACK_MODEL",
+    "wan2.7-r2v-2026-06-12",
+)
 
 # Max duration — cap at 3 s to conserve credits (user preference)
 MAX_DURATION_SECONDS = int(os.getenv("MAX_VIDEO_DURATION_SECONDS", "3"))
@@ -456,6 +460,7 @@ def _genblaze_generate_video_sync(
     reference_images: list[str],
     duration: int,
     ratio: str,
+    model_override: str | None = None,
 ) -> tuple[str, str]:
     """Run GenBlaze submit → poll → fetch using the repository's provider router.
 
@@ -467,7 +472,7 @@ def _genblaze_generate_video_sync(
         raise RuntimeError(f"Unsupported GenBlaze video provider: {provider}")
 
     ref_assets = [Asset(url=url, media_type="image/*") for url in reference_images if url]
-    model = _genblaze_model(provider, len(ref_assets))
+    model = model_override or _genblaze_model(provider, len(ref_assets))
     params: dict[str, Any] = {
         "duration": duration,
         "ratio": ratio,
@@ -592,40 +597,62 @@ async def generate_scene_clip(
     used_model: str = ""
 
     for provider in providers_order:
-        try:
-            if provider not in GENBLAZE_PROVIDER_TYPES:
-                continue
-            env_key = {
-                "dashscope": "DASHSCOPE_API_KEY",
-                "novita": "NOVITA_API_KEY",
-                "replicate": "REPLICATE_API_KEY",
-                "veo3": "VEO3_API_KEY",
-            }[provider]
-            if not os.environ.get(env_key):
-                continue
-            print(f"[scene_gen] Trying GenBlaze/{provider} (duration={duration}s, refs={len(ref_images)})")
-            video_url, used_model = await asyncio.to_thread(
-                _genblaze_generate_video_sync,
-                provider=provider,
-                prompt=prompt,
-                reference_images=ref_images,
-                duration=duration,
-                ratio=ratio,
-            )
-            used_provider = provider
-            attempts.append({
-                "provider": provider,
-                "path": "genblaze",
-                "model": used_model,
-                "status": "success",
-            })
-            break
-
-        except Exception as exc:
-            print(f"[scene_gen] Provider {provider} failed: {exc}")
-            attempts.append({"provider": provider, "model": "", "status": "failed", "error": str(exc)[:200]})
-            last_error = exc
+        if provider not in GENBLAZE_PROVIDER_TYPES:
             continue
+        env_key = {
+            "dashscope": "DASHSCOPE_API_KEY",
+            "novita": "NOVITA_API_KEY",
+            "replicate": "REPLICATE_API_KEY",
+            "veo3": "VEO3_API_KEY",
+        }[provider]
+        if not os.environ.get(env_key):
+            continue
+
+        model_candidates: list[str | None] = [None]
+        if provider == "dashscope" and len(ref_images) >= 2:
+            model_candidates = [
+                os.getenv("DASHSCOPE_R2V_MODEL", "happyhorse-1.1-r2v"),
+                QWEN_R2V_FALLBACK_MODEL,
+            ]
+
+        provider_succeeded = False
+        for model_override in dict.fromkeys(model_candidates):
+            model_label = model_override or _genblaze_model(provider, len(ref_images))
+            try:
+                print(
+                    f"[scene_gen] Trying GenBlaze/{provider} model={model_label} "
+                    f"(duration={duration}s, refs={len(ref_images)})"
+                )
+                video_url, used_model = await asyncio.to_thread(
+                    _genblaze_generate_video_sync,
+                    provider=provider,
+                    prompt=prompt,
+                    reference_images=ref_images,
+                    duration=duration,
+                    ratio=ratio,
+                    model_override=model_override,
+                )
+                used_provider = provider
+                attempts.append({
+                    "provider": provider,
+                    "path": "genblaze",
+                    "model": used_model,
+                    "status": "success",
+                })
+                provider_succeeded = True
+                break
+            except Exception as exc:
+                print(f"[scene_gen] Provider {provider} model={model_label} failed: {exc}")
+                attempts.append({
+                    "provider": provider,
+                    "model": model_label,
+                    "status": "failed",
+                    "error": str(exc)[:200],
+                })
+                last_error = exc
+
+        if provider_succeeded:
+            break
 
     if not video_url:
         raise RuntimeError(

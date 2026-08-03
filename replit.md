@@ -63,6 +63,6 @@ Vite proxies `/pipeline/*` → `http://127.0.0.1:8000` so the frontend never har
 
 ## User Preferences
 - Keep video generation short (3 seconds per clip; HappyHorse requires at least 3 seconds) to conserve AI credits
-- Use Qwen/HappyHorse through the DashScope GenBlaze adapter for video; Wan models are reserved for the separate Novita adapter
+- Use Qwen/HappyHorse through the DashScope GenBlaze adapter for video; for reference-to-video, fall back to `wan2.7-r2v-2026-06-12` within the Qwen route
 - AIML is disabled until its API is restored
 - Dark theme UI (#0a0a0a background, #dfff1e accent color)

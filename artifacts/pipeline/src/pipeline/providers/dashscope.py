@@ -111,14 +111,21 @@ class DashScopeVideoProvider(DashScopeBase):
     def create_registry(cls) -> ModelRegistry:
         happyhorse_family = ModelFamily(
             name="dashscope-happyhorse",
-            pattern=re.compile(r"^happyhorse-\d+\.\d+-(?:t2v|i2v|r2v)$"),
+            pattern=re.compile(
+                r"^(?:happyhorse-\d+\.\d+-(?:t2v|i2v|r2v)|wan2\.7-r2v(?:-\d{4}-\d{2}-\d{2})?)$"
+            ),
             spec_template=ModelSpec(
                 model_id="*",
                 modality=Modality.VIDEO,
                 input_mapping=route_images(slots=("image_url",)),
             ),
             description="HappyHorse video family",
-            example_slugs=("happyhorse-1.1-t2v", "happyhorse-1.1-i2v", "happyhorse-1.1-r2v"),
+            example_slugs=(
+                "happyhorse-1.1-t2v",
+                "happyhorse-1.1-i2v",
+                "happyhorse-1.1-r2v",
+                "wan2.7-r2v-2026-06-12",
+            ),
         )
         
         return ModelRegistry(provider_families=(happyhorse_family,))
