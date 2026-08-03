@@ -108,15 +108,9 @@ def _build_fallback_chain(
             "aiml-image",
         ]
 
-    wan = provider_status.get("wan", {}) if isinstance(provider_status, dict) else {}
-    chain: list[str] = []
-    if wan.get("i2v", {}).get("available") and (character_refs or previous_exit_frame_url):
-        chain.append("dashscope")
-    if "aiml" not in chain:
-        chain.append("aiml")
-    if "dashscope" not in chain:
-        chain.append("dashscope")
-    return chain
+    # Video generation is intentionally Qwen/DashScope-only. Availability is
+    # configuration-only, so routing must not submit a paid provider probe.
+    return ["dashscope"] if os.environ.get("DASHSCOPE_API_KEY", "").strip() else []
 
 
 async def _langchain_decision(
@@ -268,7 +262,6 @@ async def build_generation_plan(
         has_video_provider = bool(
             wan.get("i2v", {}).get("available")
             or wan.get("t2v", {}).get("available")
-            or os.environ.get("AIML_API_KEY", "")
         )
         if not has_video_provider:
             should_handoff = True
@@ -297,15 +290,10 @@ async def build_generation_plan(
                 if preferred == "dashscope" and os.environ.get("DASHSCOPE_API_KEY", ""):
                     selected_provider_hint = "dashscope"
                     break
-                if preferred == "aiml" and os.environ.get("AIML_API_KEY", ""):
-                    selected_provider_hint = "aiml"
-                    break
         if not selected_provider_hint:
             wan = provider_status.get("wan", {}) if isinstance(provider_status, dict) else {}
             if wan.get("i2v", {}).get("available") or wan.get("t2v", {}).get("available"):
                 selected_provider_hint = "dashscope"
-            elif os.environ.get("AIML_API_KEY", ""):
-                selected_provider_hint = "aiml"
             else:
                 selected_provider_hint = None
     elif selected_media_kind == "image":
@@ -325,8 +313,6 @@ async def build_generation_plan(
         for provider in fallback_chain:
             if provider not in ordered:
                 ordered.append(provider)
-        if os.environ.get("AIML_API_KEY", "") and "aiml" not in ordered:
-            ordered.append("aiml")
         fallback_chain = ordered
 
     return GenerationPlan(

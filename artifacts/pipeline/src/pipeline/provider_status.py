@@ -191,39 +191,17 @@ async def _probe_wan_r2v() -> dict[str, Any]:
 
 
 async def get_provider_status(force_refresh: bool = False) -> dict[str, Any]:
-    import asyncio
-
-    if not force_refresh:
-        cached = await _load_cached_status()
-        if cached:
-            return cached
-
-    # Probe all providers in parallel for faster status check
-    wan_t2v, wan_i2v, wan_r2v = await asyncio.gather(
-        _probe_wan_t2v(),
-        _probe_wan_i2v(),
-        _probe_wan_r2v(),
-    )
-    
-    payload = {
+    """Return Qwen/DashScope configuration status without submitting billable probes."""
+    configured = bool(os.environ.get("DASHSCOPE_API_KEY", "").strip())
+    model = os.environ.get("DASHSCOPE_VIDEO_MODEL", "wan2.1-vace-plus")
+    error = None if configured else "DASHSCOPE_API_KEY is missing"
+    capability = {"available": configured, "model": model, "mode": "configuration_only", "error": error}
+    return {
         "checked_at": _utc_now(),
-        "wan": {
-            "t2v": wan_t2v,
-            "i2v": wan_i2v,
-            "r2v": wan_r2v,
-        },
+        "mode": "configuration_only",
+        "wan": {"t2v": dict(capability), "i2v": dict(capability), "r2v": dict(capability)},
+        "recommended_mode": "wan_i2v" if configured else "narrated_image_story",
     }
-    if payload["wan"]["i2v"].get("available"):
-        payload["recommended_mode"] = "wan_i2v"
-    elif payload["wan"]["r2v"].get("available"):
-        payload["recommended_mode"] = "wan_r2v"
-    elif payload["wan"]["t2v"].get("available"):
-        payload["recommended_mode"] = "wan_t2v"
-    else:
-        payload["recommended_mode"] = "narrated_image_story"
-    await _store_cached_status(payload)
-    return payload
-
 
 async def _post_json(http: httpx.AsyncClient, url: str, headers: dict, payload: dict):
     r = await http.post(url, headers=headers, json=payload)

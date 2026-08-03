@@ -68,7 +68,43 @@ async def upload_to_b2(local_path: str, remote_key: str) -> Optional[str]:
 
 # Alias for backwards compatibility
 upload_to_r2 = upload_to_b2
+async def _store_asset_record(
+    pool: Any,
+    story_id: str,
+    entity_type: str,
+    entity_id: str,
+    asset_type: str,
+    storage_url: str,
+    mime_type: str,
+    tags: Optional[list[str]] = None,
+    metadata: Optional[dict[str, Any]] = None,
+    parent_asset_id: Optional[str] = None,
+) -> Optional[str]:
+    """Persist a derived asset in the asset table and return its asset id."""
+    asset_id = str(uuid.uuid4())
+    storage_key = build_key("stories", story_id, entity_type, f"{asset_id}.{mime_type.split('/')[-1]}")
 
+    await pool.execute(
+        """INSERT INTO assets (
+               id, story_id, entity_type, entity_id, asset_type,
+               storage_key, storage_url, mime_type, tags, metadata,
+               parent_asset_id, version, created_at
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, 1, now())""",
+        asset_id,
+        story_id,
+        entity_type,
+        entity_id,
+        asset_type,
+        storage_key,
+        storage_url,
+        mime_type,
+        tags or [],
+        json.dumps(metadata or {}),
+        parent_asset_id,
+    )
+
+    return asset_id
 
 async def extract_frame_ffmpeg(
     video_url: str,
@@ -214,10 +250,61 @@ async def extract_scene_frame_impl(
             "error": "Failed to upload frame to storage",
             "local_path": temp_path,
         }
+
+    source_asset_id = None
+    try:
+        source_asset = await pool.fetchrow(
+            """SELECT id FROM assets
+               WHERE story_id = $1 AND entity_type = 'scene' AND entity_id = $2
+                 AND asset_type IN ('video', 'image')
+               ORDER BY created_at DESC
+               LIMIT 1""",
+            story_id,
+            scene_id,
+        )
+        if source_asset:
+            source_asset_id = str(source_asset["id"])
+    except Exception:
+        source_asset_id = None
+
+    asset_id = await _store_asset_record(
+        pool=pool,
+        story_id=story_id,
+        entity_type="scene",
+        entity_id=scene_id,
+        asset_type="image",
+        storage_url=frame_url,
+        mime_type="image/jpeg",
+        tags=["frame", "reference", f"scene_{scene_id}"],
+        metadata={
+            "kind": "extract_scene_frame",
+            "scene_id": scene_id,
+            "timestamp": timestamp,
+            "frame_position": frame_position,
+            "source_video_url": video_url,
+        },
+        parent_asset_id=source_asset_id,
+    )
+
+    if source_asset_id and asset_id:
+        try:
+            await pool.execute(
+                """INSERT INTO asset_relationships (
+                       id, source_asset_id, target_asset_id, relationship_type
+                   )
+                   VALUES ($1, $2, $3, $4)""",
+                str(uuid.uuid4()),
+                source_asset_id,
+                asset_id,
+                "extract_frame",
+            )
+        except Exception:
+            pass
     
     return {
         "success": True,
         "frame_url": frame_url,
+        "asset_id": asset_id,
         "scene_id": scene_id,
         "timestamp": timestamp,
         "frame_position": frame_position,
@@ -311,10 +398,61 @@ async def screenshot_previous_scene_impl(
             "success": False,
             "error": "Failed to upload screenshot to storage",
         }
-    
+
+    source_asset_id = None
+    try:
+        source_asset = await pool.fetchrow(
+            """SELECT id FROM assets
+               WHERE story_id = $1 AND entity_type = 'scene' AND entity_id = $2
+                 AND asset_type IN ('video', 'image')
+               ORDER BY created_at DESC
+               LIMIT 1""",
+            story_id,
+            source_scene_id,
+        )
+        if source_asset:
+            source_asset_id = str(source_asset["id"])
+    except Exception:
+        source_asset_id = None
+
+    screenshot_asset_id = await _store_asset_record(
+        pool=pool,
+        story_id=story_id,
+        entity_type="scene",
+        entity_id=source_scene_id,
+        asset_type="image",
+        storage_url=screenshot_url,
+        mime_type="image/jpeg",
+        tags=["screenshot", "exit_frame", f"scene_{source_scene_id}"],
+        metadata={
+            "kind": "screenshot_previous_scene",
+            "source_scene_id": source_scene_id,
+            "source_scene_number": source.get("scene_number"),
+            "frame_position": frame_position,
+            "timestamp": timestamp,
+        },
+        parent_asset_id=source_asset_id,
+    )
+
+    if source_asset_id and screenshot_asset_id:
+        try:
+            await pool.execute(
+                """INSERT INTO asset_relationships (
+                       id, source_asset_id, target_asset_id, relationship_type
+                   )
+                   VALUES ($1, $2, $3, $4)""",
+                str(uuid.uuid4()),
+                source_asset_id,
+                screenshot_asset_id,
+                "screenshot_previous_scene",
+            )
+        except Exception:
+            pass
+
     result = {
         "success": True,
         "screenshot_url": screenshot_url,
+        "asset_id": screenshot_asset_id,
         "source_scene_id": source_scene_id,
         "source_scene_number": source.get("scene_number"),
         "frame_position": frame_position,
@@ -967,3 +1105,4 @@ def register_media_tools(register_tool_fn):
         },
         category="generation",
     )(poll_genblaze_status_impl)
+

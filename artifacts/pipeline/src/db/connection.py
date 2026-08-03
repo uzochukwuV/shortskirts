@@ -1,50 +1,68 @@
-import asyncpg
 import os
 import ssl
-import re
 from typing import Optional
 
-# Load .env if not already loaded
-def _load_env():
-    if os.environ.get("COCKROACHDB_URL"):
-        return  # Already loaded
+import asyncpg
+from fastapi import HTTPException, status
+
+
+def _load_env() -> None:
     try:
         from dotenv import load_dotenv
-        # Try multiple possible locations for .env
-        # Use normpath to resolve .. in paths
-        possible_paths = [
-            os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".env")),
-            os.path.join(os.path.dirname(__file__), ".env"),
-            os.path.join(os.getcwd(), ".env"),
-            os.path.join(os.getcwd(), "..", ".env"),
-            ".env",
-        ]
-        for path in possible_paths:
-            if os.path.exists(path):
-                load_dotenv(path)
-                print(f"[db] Loaded env from {path}")
-                return
-        print(f"[db] Warning: Could not find .env file in any of: {possible_paths}")
-    except Exception as e:
-        print(f"[db] Warning: Could not load .env file: {e}")
+    except Exception:
+        return
+
+    possible_paths = [
+        os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".env")),
+        os.path.join(os.path.dirname(__file__), ".env"),
+        os.path.join(os.getcwd(), ".env"),
+        os.path.join(os.getcwd(), "..", ".env"),
+        ".env",
+    ]
+
+    for path in possible_paths:
+        if os.path.exists(path):
+            load_dotenv(path, override=False)
+            print(f"[db] Loaded env from {path}")
+            return
+
+    print(f"[db] Warning: Could not find .env file in any of: {possible_paths}")
+
 
 _load_env()
 
 _pool: Optional[asyncpg.Pool] = None
 
 
+def _clean_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    cleaned = value.strip().strip('"').strip("'")
+    return cleaned or None
+
+
+def _resolve_db_url() -> str:
+    for key in ("COCKROACHDB_URL", "DATABASE_URL", "NEW_DB"):
+        url = _clean_url(os.environ.get(key))
+        if url:
+            return url
+    raise RuntimeError("No database connection string found. Set COCKROACHDB_URL or DATABASE_URL.")
+
+
 async def get_pool() -> asyncpg.Pool:
     global _pool
-    if _pool is None:
-        url = os.environ["COCKROACHDB_URL"]
-        ssl_ctx = ssl.create_default_context()
-        ssl_ctx.check_hostname = False
-        ssl_ctx.verify_mode = ssl.CERT_NONE
-        
-        async def init_connection(conn):
-            # Enable multiple active portals for CockroachDB compatibility
-            await conn.execute("SET multiple_active_portals_enabled = true")
-        
+    if _pool is not None:
+        return _pool
+
+    url = _resolve_db_url()
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
+
+    async def init_connection(conn):
+        await conn.execute("SET multiple_active_portals_enabled = true")
+
+    try:
         _pool = await asyncpg.create_pool(
             url,
             ssl=ssl_ctx,
@@ -52,9 +70,16 @@ async def get_pool() -> asyncpg.Pool:
             max_size=10,
             command_timeout=60,
             init=init_connection,
-            statement_cache_size=0,  # Disable statement caching for CockroachDB compatibility
+            statement_cache_size=0,
         )
-    return _pool
+        return _pool
+    except Exception as exc:
+        _pool = None
+        print(f"[db] Failed to create pool: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection unavailable",
+        ) from exc
 
 
 async def close_pool():
@@ -65,7 +90,6 @@ async def close_pool():
 
 
 def _split_statements(sql: str) -> list[str]:
-    # Remove comment lines, split on semicolons
     lines = []
     for line in sql.splitlines():
         stripped = line.strip()
@@ -95,8 +119,6 @@ async def init_db():
                 else:
                     print(f"[db] Warning on stmt: {e}\nStatement: {stmt[:120]}")
 
-        # Backfill media URLs for older narrated-image scenes where the asset was
-        # written into JSON metadata before the dedicated column existed.
         repair_statements = [
             """
             UPDATE scenes

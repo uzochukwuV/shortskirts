@@ -54,10 +54,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+frontend_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "FRONTEND_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174",
+    ).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=frontend_origins,
+    allow_origin_regex=r'^https?://(localhost|127\.0\.0\.1)(:\d+)?$',
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -93,132 +103,5 @@ async def health():
         "media": {
             "ffmpeg_available": ffmpeg_available(),
             "ffmpeg_path": ffmpeg_path(),
-        },
-    }
-
-
-@app.get("/pipeline")
-async def root():
-    return {
-        "service": "StoryForge Anime Pipeline",
-        "version": "2.0.0",
-        "features": [
-            "workflow_types: creator_series|brand_campaign|social_short|educational|game_lore|narrated_image_story",
-            "approval_gates: outline, characters, scenes",
-            "checkpoint_reviews: pause every 3 narrated-image scenes for human approval",
-            "granular_regeneration: per-scene, per-character-refs",
-            "brand_bibles: brand|character|world|campaign memory",
-            "agent_assistant: chat-based AI production assistant with tool calling",
-        ],
-        "endpoints": {
-            "stories": [
-                "POST   /pipeline/stories",
-                "GET    /pipeline/stories",
-                "GET    /pipeline/stories/{id}",
-                "GET    /pipeline/stories/{id}/capabilities",
-                "POST   /pipeline/stories/{id}/operations-agent",
-                "PUT    /pipeline/stories/{id}/approve-outline",
-                "POST   /pipeline/stories/{id}/regenerate-outline",
-                "POST   /pipeline/stories/{id}/generate",
-                "GET    /pipeline/stories/{story_id}/checkpoints",
-                "PUT    /pipeline/stories/{story_id}/checkpoints/{checkpoint_id}/approve",
-                "POST   /pipeline/stories/{story_id}/checkpoints/{checkpoint_id}/audio/regenerate",
-                "PUT    /pipeline/stories/{story_id}/pipeline-config",
-                "GET    /pipeline/stories/{story_id}/history",
-                "GET    /pipeline/stories/{story_id}/checkpoints/{checkpoint_id}/history",
-            ],
-            "narration": [
-                "GET    /pipeline/narration/voices",
-            ],
-            "providers": [
-                "GET    /pipeline/providers/status",
-            ],
-            "pipeline_runs": [
-                "GET    /pipeline/runs/story/{story_id}",
-                "GET    /pipeline/runs/{run_id}",
-                "GET    /pipeline/runs/{run_id}/steps",
-                "GET    /pipeline/runs/{run_id}/artifacts",
-                "GET    /pipeline/runs/steps/{step_id}",
-                "POST   /pipeline/runs/steps/{step_id}/retry",
-                "POST   /pipeline/runs/{run_id}/cancel",
-            ],
-            "bibles": [
-                "POST   /pipeline/bibles",
-                "GET    /pipeline/bibles/story/{story_id}",
-                "GET    /pipeline/bibles/{id}",
-                "PUT    /pipeline/bibles/{id}",
-                "DELETE /pipeline/bibles/{id}",
-            ],
-            "characters": [
-                "POST   /pipeline/characters",
-                "GET    /pipeline/characters/story/{story_id}",
-                "GET    /pipeline/characters/{id}",
-                "PUT    /pipeline/characters/{id}/approve",
-                "PUT    /pipeline/characters/{id}/lock",
-                "POST   /pipeline/characters/{id}/regenerate-refs",
-            ],
-            "scenes": [
-                "GET    /pipeline/scenes/{id}",
-                "PUT    /pipeline/scenes/{id}/approve",
-                "PUT    /pipeline/scenes/{id}/reject",
-                "PUT    /pipeline/scenes/{id}/lock",
-                "POST   /pipeline/scenes/{id}/regenerate",
-                "GET    /pipeline/scenes/{id}/history",
-            ],
-            "episodes": [
-                "GET    /pipeline/episodes/story/{story_id}",
-                "GET    /pipeline/episodes/{id}",
-            ],
-            "gallery": [
-                "GET    /pipeline/gallery",
-            ],
-            "uploads": [
-                "POST   /pipeline/uploads/image",
-            ],
-            "jobs": [
-                "GET    /pipeline/jobs/{id}",
-                "GET    /pipeline/jobs/entity/{type}/{entity_id}",
-                "POST   /pipeline/jobs/{id}/cancel",
-                "POST   /pipeline/jobs/{id}/retry",
-            ],
-            "social": [
-                "GET    /pipeline/social/accounts",
-                "POST   /pipeline/social/accounts/mock",
-                "POST   /pipeline/social/{platform}/connect",
-                "GET    /pipeline/social/{platform}/callback",
-                "DELETE /pipeline/social/accounts/{account_id}",
-            ],
-            "publishing": [
-                "POST   /pipeline/publish-targets",
-                "GET    /pipeline/publish-targets",
-                "GET    /pipeline/publish-targets/{target_id}",
-                "POST   /pipeline/publish-targets/{target_id}/approve",
-                "POST   /pipeline/publish-targets/{target_id}/publish-now",
-                "POST   /pipeline/publish-targets/{target_id}/retry",
-                "POST   /pipeline/publish-targets/{target_id}/cancel",
-            ],
-            "schedules": [
-                "POST   /pipeline/schedules",
-                "GET    /pipeline/schedules",
-                "GET    /pipeline/schedules/{schedule_id}",
-                "PATCH  /pipeline/schedules/{schedule_id}",
-                "DELETE /pipeline/schedules/{schedule_id}",
-                "POST   /pipeline/schedules/{schedule_id}/run-now",
-                "POST   /pipeline/schedules/dispatch-due",
-                "GET    /pipeline/schedules/{schedule_id}/runs",
-            ],
-            "agent": [
-                "POST   /pipeline/agent/conversations",
-                "GET    /pipeline/agent/conversations/{id}",
-                "DELETE /pipeline/agent/conversations/{id}",
-                "POST   /pipeline/agent/chat",
-                "GET    /pipeline/agent/tools",
-                "GET    /pipeline/agent/tools/{tool_name}",
-                "POST   /pipeline/agent/tools/execute",
-                "GET    /pipeline/agent/stories/{story_id}/context",
-                "GET    /pipeline/agent/stories/{story_id}/timeline/{scene_id}",
-                "GET    /pipeline/agent/stories/{story_id}/assets",
-                "GET    /pipeline/agent/providers/status",
-            ],
         },
     }

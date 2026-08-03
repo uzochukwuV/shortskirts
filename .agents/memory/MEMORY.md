@@ -1,2 +1,0 @@
-- [AIML API response format](aiml-api.md) — video URL is at `data["video"]["url"]`, not top-level; poll via `GET /v2/video/generations?generation_id={id}`
-- [StoryForge pipeline model choices](storyforge-models.md) — confirmed working models and B2 key permission gotcha

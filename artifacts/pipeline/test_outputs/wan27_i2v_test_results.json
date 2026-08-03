@@ -1,0 +1,16 @@
+[
+  {
+    "scene": 1,
+    "task_id": "f5ebd346-6f72-4121-aafa-06a9e2b3ed34",
+    "video_url": "https://dashscope-463f.oss-accelerate.aliyuncs.com/1d/03/20260802/56fbed53/20068589-metadata_user_3cebb2bce815cc60.mp4?Expires=1785765256&OSSAccessKeyId=LTAI5t7xkDxYoFdeAc4nqUeU&Signature=Ukyqg6%2FI3t97WOGips%2BHwYYrQSk%3D",
+    "file": "artifacts\\pipeline\\test_outputs\\wan27_i2v_scene_01.mp4",
+    "bytes": 1135774
+  },
+  {
+    "scene": 2,
+    "task_id": "e6a8c758-998b-4108-8211-6109213d4ce9",
+    "video_url": "https://dashscope-463f.oss-accelerate.aliyuncs.com/1d/a9/20260802/04a3722f/97233673-metadata_user_5f9d6302a998ffc9.mp4?Expires=1785765284&OSSAccessKeyId=LTAI5t7xkDxYoFdeAc4nqUeU&Signature=meKR5SXDp4nxMc43bSya9LRRSbk%3D",
+    "file": "artifacts\\pipeline\\test_outputs\\wan27_i2v_scene_02.mp4",
+    "bytes": 2189299
+  }
+]

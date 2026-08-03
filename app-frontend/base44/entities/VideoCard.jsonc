@@ -1,0 +1,27 @@
+{
+  "name": "VideoCard",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string"
+    },
+    "author": {
+      "type": "string"
+    },
+    "category": {
+      "type": "string"
+    },
+    "image_url": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "title",
+    "author",
+    "category",
+    "image_url"
+  ]
+}

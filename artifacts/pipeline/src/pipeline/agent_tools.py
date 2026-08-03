@@ -441,23 +441,19 @@ async def create_scene_impl(
     if not episode:
         raise ValueError(f"Episode not found: {episode_id}")
     
-    # Get max scene number
+    # Get max scene number and keep insertion collision-safe.
     max_scene = await pool.fetchval(
         "SELECT COALESCE(MAX(scene_number), 0) FROM scenes WHERE episode_id = $1",
         episode_id,
     )
-    
-    new_scene_num = insert_after + 1 if insert_after else max_scene + 1
-    
-    # Reorder existing scenes if inserting
-    if insert_after and insert_after < max_scene:
-        await pool.execute(
-            """UPDATE scenes SET scene_number = scene_number + 1
-               WHERE episode_id = $1 AND scene_number > $2
-               ORDER BY scene_number DESC""",
-            episode_id, insert_after,
-        )
-    
+
+    effective_insert_after = insert_after if insert_after is not None else None
+    if effective_insert_after is not None:
+        effective_insert_after = min(effective_insert_after, max_scene)
+
+    new_scene_num = (effective_insert_after + 1) if effective_insert_after is not None else max_scene + 1
+    previous_scene_num = effective_insert_after if effective_insert_after is not None else max_scene
+
     # Generate metadata
     metadata = {
         "title": scene_data.get("title", f"Scene {new_scene_num}"),
@@ -470,17 +466,80 @@ async def create_scene_impl(
         "media_kind": scene_data.get("media_kind", "video"),
         "duration_seconds": scene_data.get("duration_seconds", 5),
     }
-    
-    # Create scene
-    result = await pool.fetchrow(
-        """INSERT INTO scenes (episode_id, scene_number, prompt, status, generation_metadata)
-           VALUES ($1, $2, $3, 'pending', $4::jsonb)
-           RETURNING *""",
-        episode_id, new_scene_num, 
-        scene_data.get("prompt", f"Scene {new_scene_num}"),
-        json.dumps(metadata),
-    )
-    
+
+    result = None
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            if effective_insert_after is not None and effective_insert_after < max_scene:
+                temp_offset = max_scene + 1000
+                await conn.execute(
+                    """UPDATE scenes
+                       SET scene_number = scene_number + $3
+                       WHERE episode_id = $1 AND scene_number > $2""",
+                    episode_id, effective_insert_after, temp_offset,
+                )
+
+            result = await conn.fetchrow(
+                """INSERT INTO scenes (
+                       episode_id,
+                       scene_number,
+                       prompt,
+                       status,
+                       generation_metadata,
+                       source_scene_id
+                   )
+                   VALUES ($1, $2, $3, 'pending', $4::jsonb, $5)
+                   RETURNING *""",
+                episode_id,
+                new_scene_num,
+                scene_data.get("prompt", f"Scene {new_scene_num}"),
+                json.dumps(metadata),
+                None,
+            )
+
+            if previous_scene_num > 0:
+                prev_scene = await conn.fetchrow(
+                    """SELECT id, scene_number, exit_frame_url, clip_url, image_url
+                       FROM scenes
+                       WHERE episode_id = $1 AND scene_number = $2""",
+                    episode_id,
+                    previous_scene_num,
+                )
+                if prev_scene:
+                    continuity_url = (
+                        prev_scene.get("exit_frame_url")
+                        or prev_scene.get("image_url")
+                    )
+                    continuity_meta = dict(metadata)
+                    if continuity_url:
+                        continuity_meta["continuity_reference"] = {
+                            "source_scene_id": str(prev_scene["id"]),
+                            "source_scene_number": prev_scene["scene_number"],
+                            "exit_frame_url": continuity_url,
+                            "type": "exit_frame",
+                        }
+                        continuity_meta["reference_image_urls"] = [continuity_url]
+
+                    await conn.execute(
+                        """UPDATE scenes
+                           SET source_scene_id = $2,
+                               generation_metadata = $3::jsonb,
+                               updated_at = now()
+                           WHERE id = $1""",
+                        result["id"],
+                        prev_scene["id"],
+                        json.dumps(continuity_meta),
+                    )
+
+            if effective_insert_after is not None and effective_insert_after < max_scene:
+                temp_offset = max_scene + 1000
+                await conn.execute(
+                    """UPDATE scenes
+                       SET scene_number = scene_number - $3 + 1
+                       WHERE episode_id = $1 AND scene_number > $2 + $3""",
+                    episode_id, effective_insert_after, temp_offset,
+                )
+
     # Handle both dict-like and row-like objects
     result_id = getattr(result, "id", result.get("id") if hasattr(result, "get") else None)
     result_scene_num = getattr(result, "scene_number", result.get("scene_number") if hasattr(result, "get") else None)
@@ -757,6 +816,117 @@ async def approve_scene_impl(
     return {"id": scene_id, "approval_status": "approved"}
 
 
+async def approve_story_outline_impl(
+    pool: Any,
+    story_id: str,
+) -> dict[str, Any]:
+    """
+    Approve a story outline for generation.
+    """
+    story = await pool.fetchrow(
+        "SELECT * FROM stories WHERE id = $1",
+        story_id,
+    )
+    if not story:
+        raise ValueError(f"Story not found: {story_id}")
+
+    if (story.get("status") or "").strip().lower() != "draft":
+        raise ValueError("Outline approval is only allowed for draft stories")
+
+    updated = await pool.fetchrow(
+        """UPDATE stories
+           SET status='approved', approval_status='approved', approved_at=now(), updated_at=now()
+           WHERE id=$1
+           RETURNING *""",
+        story_id,
+    )
+    if not updated:
+        raise ValueError(f"Story not found: {story_id}")
+
+    try:
+        from pipeline.history import record_story_history
+        await record_story_history(
+            pool,
+            story=updated,
+            event_type="outline_approved",
+            payload={
+                "status": updated["status"],
+                "approval_status": updated.get("approval_status"),
+            },
+        )
+    except Exception:
+        pass
+
+    return {
+        "id": str(updated["id"]),
+        "status": updated.get("status"),
+        "approval_status": updated.get("approval_status"),
+        "approved_at": updated.get("approved_at"),
+    }
+
+
+async def launch_story_generation_impl(
+    pool: Any,
+    story_id: str,
+) -> dict[str, Any]:
+    """
+    Approve a draft outline if needed, then start story generation.
+    """
+    story = await pool.fetchrow(
+        "SELECT * FROM stories WHERE id = $1",
+        story_id,
+    )
+    if not story:
+        raise ValueError(f"Story not found: {story_id}")
+
+    story_status = (story.get("status") or "").strip().lower()
+    if story_status == "draft":
+        await approve_story_outline_impl(pool, story_id)
+
+    updated_story = await pool.fetchrow(
+        """UPDATE stories
+           SET status='generating', updated_at=now()
+           WHERE id=$1
+           AND status NOT IN ('generating', 'checkpoint_review')
+           RETURNING *""",
+        story_id,
+    )
+
+    if not updated_story:
+        existing_story = await pool.fetchrow(
+            "SELECT * FROM stories WHERE id=$1",
+            story_id,
+        )
+        if not existing_story:
+            raise ValueError(f"Story not found: {story_id}")
+        if (existing_story.get("status") or "").strip().lower() in {"generating", "checkpoint_review"}:
+            raise ValueError("Generation already in progress")
+        raise ValueError("Cannot start generation")
+
+    job_row = await pool.fetchrow(
+        """INSERT INTO generation_jobs
+           (entity_type, entity_id, status, total_steps, current_step, job_type)
+           VALUES ('story',$1,'pending',0,'Queued','full_episode')
+           RETURNING *""",
+        story_id,
+    )
+    job_id = str(job_row["id"])
+
+    try:
+        from job_queue import enqueue_job, WORKLOAD_STORY
+        await enqueue_job(job_id, workload=WORKLOAD_STORY)
+    except Exception:
+        pass
+
+    return {
+        "id": job_id,
+        "entity_type": "story",
+        "entity_id": story_id,
+        "status": "pending",
+        "progress": 0,
+        "total_steps": 0,
+        "current_step": "Queued",
+    }
 async def lock_scene_impl(
     pool: Any,
     story_id: str,
@@ -954,7 +1124,32 @@ def register_all_tools():
         },
         category="read",
     )(get_job_status_impl)
-    
+
+    register_tool(
+        name="approve_story_outline",
+        description="Approve a story outline so generation can begin.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "story_id": {"type": "string", "description": "The story ID"},
+            },
+            "required": ["story_id"],
+        },
+        category="mutation",
+    )(approve_story_outline_impl)
+
+    register_tool(
+        name="launch_story_generation",
+        description="Approve the outline if needed and start story generation.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "story_id": {"type": "string", "description": "The story ID"},
+            },
+            "required": ["story_id"],
+        },
+        category="generation",
+    )(launch_story_generation_impl)    
     # Mutation tools
     register_tool(
         name="create_scene",
@@ -1126,3 +1321,6 @@ def register_all_tools():
 
 # Initialize tools on module load
 register_all_tools()
+
+
+

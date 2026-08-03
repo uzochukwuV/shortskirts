@@ -42,6 +42,14 @@ DELAYED_QUEUE_KEYS = {
     WORKLOAD_ASSEMBLY: _qkey("storyforge:jobs:delayed:assembly"),
     WORKLOAD_SCHEDULER: _qkey("storyforge:jobs:delayed:scheduler"),
 }
+PROCESSING_QUEUE_KEYS = {
+    WORKLOAD_STORY: _qkey("storyforge:jobs:processing:story"),
+    WORKLOAD_MEDIA: _qkey("storyforge:jobs:processing:media"),
+    WORKLOAD_AUDIO: _qkey("storyforge:jobs:processing:audio"),
+    WORKLOAD_PUBLISH: _qkey("storyforge:jobs:processing:publish"),
+    WORKLOAD_ASSEMBLY: _qkey("storyforge:jobs:processing:assembly"),
+    WORKLOAD_SCHEDULER: _qkey("storyforge:jobs:processing:scheduler"),
+}
 
 _redis_client: Optional[redis.Redis] = None
 
@@ -105,6 +113,9 @@ def delayed_queue_key(workload: str) -> str:
     return DELAYED_QUEUE_KEYS.get(workload, DELAYED_QUEUE_KEYS[WORKLOAD_STORY])
 
 
+def processing_queue_key(workload: str) -> str:
+    return PROCESSING_QUEUE_KEYS.get(workload, PROCESSING_QUEUE_KEYS[WORKLOAD_STORY])
+
 async def enqueue_job(job_id: str, delay_seconds: int = 0, workload: str = WORKLOAD_STORY) -> None:
     client = await get_redis()
     ready_key = ready_queue_key(workload)
@@ -133,14 +144,22 @@ async def promote_due_delayed_jobs(workload: str, limit: int = 100) -> int:
     return moved
 
 
-async def blpop_job(workload: str, timeout: int = 5) -> Optional[str]:
+async def reserve_job(workload: str, timeout: int = 5) -> Optional[str]:
+    """Atomically reserve a ready job until the worker acknowledges it."""
     client = await get_redis()
-    item = await client.blpop(ready_queue_key(workload), timeout=timeout)
-    if not item:
-        return None
-    _, job_id = item
-    return job_id
+    return await client.brpoplpush(
+        ready_queue_key(workload), processing_queue_key(workload), timeout=timeout
+    )
 
+
+async def ack_job(job_id: str, workload: str) -> None:
+    client = await get_redis()
+    await client.lrem(processing_queue_key(workload), 1, job_id)
+
+
+async def processing_job_ids(workload: str) -> list[str]:
+    client = await get_redis()
+    return await client.lrange(processing_queue_key(workload), 0, -1)
 
 async def claim_job(
     pool: asyncpg.Pool,

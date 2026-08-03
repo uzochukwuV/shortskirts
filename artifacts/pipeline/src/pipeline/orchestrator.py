@@ -153,6 +153,46 @@ async def _process_episode_scenes_parallel(
     current_exit_frame = previous_exit_frame
     current_summary = previous_summary
 
+    # Each scene depends on the actual exit frame and summary from its predecessor.
+    # This is deliberately sequential to preserve continuity and avoid parallel spend.
+    for scene_plan in scene_plans:
+        scene_num = scene_plan["scene_number"]
+        try:
+            cp_scene, exit_frame, summary, failure = await _generate_single_scene_internal(
+                pool=pool,
+                story=story,
+                story_id=story_id,
+                ep_id=ep_id,
+                ep_plan=ep_plan,
+                scene_plan=scene_plan,
+                scene_num=scene_num,
+                episode_number=episode_number,
+                char_map=char_map,
+                story_scene_refs=story_scene_refs,
+                previous_exit_frame=current_exit_frame,
+                previous_summary=current_summary,
+                missing_ref_characters=missing_ref_characters,
+                is_narrated_image_story=is_narrated_image_story,
+                narration_model=narration_model,
+                narration_voice=narration_voice,
+                workflow_version=workflow_version,
+                generation_version=generation_version,
+                run_id=run_id,
+                job_id=job_id,
+            )
+            if failure:
+                failed_scene_numbers.append(failure)
+                break
+            if cp_scene:
+                checkpoint_scenes.append(cp_scene)
+            if exit_frame:
+                current_exit_frame = exit_frame
+            if summary:
+                current_summary = summary
+        except Exception as exc:
+            failed_scene_numbers.append((episode_number, scene_num, str(exc)[:300]))
+            break
+    return checkpoint_scenes, current_exit_frame, current_summary, failed_scene_numbers
     # For strict continuity, process scenes sequentially
     # For performance, process first scene then remaining in parallel
     if len(scene_plans) == 1:
