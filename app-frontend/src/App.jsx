@@ -18,8 +18,11 @@ import ForgotPassword from '@/pages/ForgotPassword';
 import ResetPassword from '@/pages/ResetPassword';
 
 const LoadingScreen = () => (
-  <div className="fixed inset-0 flex items-center justify-center bg-background">
-    <div className="w-8 h-8 border-4 border-slate-200 border-t-slate-800 rounded-full animate-spin" />
+  <div className="fixed inset-0 flex items-center justify-center bg-[#0a0a0a]">
+    <div className="flex flex-col items-center gap-3">
+      <div className="w-8 h-8 border-2 border-[#dfff1e]/30 border-t-[#dfff1e] rounded-full animate-spin" />
+      <span className="text-white/40 text-xs">Loading…</span>
+    </div>
   </div>
 );
 
@@ -27,9 +30,7 @@ const PublicOnlyRoute = () => {
   const { isAuthenticated, isLoadingAuth, authChecked } = useAuth();
   const location = useLocation();
 
-  if (isLoadingAuth || !authChecked) {
-    return <LoadingScreen />;
-  }
+  if (isLoadingAuth || !authChecked) return <LoadingScreen />;
 
   if (isAuthenticated) {
     const target = safeReturnTo();
@@ -50,7 +51,8 @@ const AuthenticatedApp = () => (
     </Route>
     <Route element={<ProtectedRoute />}>
       <Route path="/dashboard" element={<Dashboard />} />
-      <Route path="/workspace" element={<Workspace />} />`n      <Route path="/workspace/:storyId" element={<Workspace />} />
+      <Route path="/workspace" element={<Workspace />} />
+      <Route path="/workspace/:storyId" element={<Workspace />} />
     </Route>
     <Route path="*" element={<PageNotFound />} />
   </Routes>
