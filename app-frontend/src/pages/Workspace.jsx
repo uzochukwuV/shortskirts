@@ -95,6 +95,10 @@ function SceneViewer({ scene, story, onGenerate, onApprove, onRegenerate, isGene
   const canGenerate = story?.status === 'approved' || story?.status === 'draft';
   const canApprove  = scene?.status === 'completed' && scene?.approval_status !== 'approved';
 
+  useEffect(() => {
+    setVideoError(false);
+  }, [scene?.id, scene?.clip_url, scene?.image_url]);
+
   if (!scene) {
     return (
       <div className="flex-1 flex items-center justify-center bg-[radial-gradient(circle_at_center,_rgba(255,255,255,0.04)_1px,_transparent_1px)] [background-size:28px_28px]">
@@ -297,14 +301,97 @@ function ChatPanel({ messages, draft, setDraft, onSend, isSending, canChat, stat
 
 // ─── Assets Panel ──────────────────────────────────────────────────────────────
 
-function AssetsPanel({ scenes, characters, storyId }) {
+function AssetsPanel({ scenes, characters, storyId, refreshKey }) {
   const [tab, setTab] = useState('scenes');
+  const [libraryAssets, setLibraryAssets] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!storyId) return undefined;
+
+    setIsLoading(true);
+    setLoadError('');
+    agentService.storyAssets(storyId)
+      .then((response) => {
+        if (!cancelled) {
+          setLibraryAssets(Array.isArray(response) ? response : response?.assets || []);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setLoadError(error?.message || 'Could not load generated assets.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [refreshKey, storyId]);
+
+  const referenceAssets = [
+    ...characters.flatMap((character) =>
+      (Array.isArray(character.ref_image_urls) ? character.ref_image_urls : []).map((url, index) => ({
+        id: `${character.id}-reference-${index}`,
+        url,
+        name: `${character.name || 'Character'} reference ${index + 1}`,
+        detail: character.role || 'Character reference',
+        type: 'image',
+      })),
+    ),
+    ...scenes
+      .filter((scene) => scene.exit_frame_url)
+      .map((scene) => ({
+        id: `${scene.id}-exit-frame`,
+        url: scene.exit_frame_url,
+        name: `${scene.title || `Scene ${scene.scene_number}`} exit frame`,
+        detail: 'Continuity reference',
+        type: 'image',
+      })),
+  ];
+
+  const generatedAssets = libraryAssets
+    .map((asset, index) => {
+      const url = asset.url || asset.storage_url || asset.public_url || asset.file_url;
+      const type = asset.asset_type || asset.media_type || asset.mime_type || '';
+      return {
+        id: asset.id || asset.storage_key || `asset-${index}`,
+        url,
+        name: asset.name || asset.title || asset.storage_key?.split('/').pop() || 'Generated asset',
+        detail: asset.entity_type || asset.asset_type || 'Generated',
+        type: type.includes('video') ? 'video' : 'image',
+      };
+    })
+    .filter((asset) => asset.url);
+
+  const renderAsset = (asset, compact = false) => (
+    <div
+      key={asset.id}
+      className={`rounded-xl bg-white/[0.03] border border-white/5 overflow-hidden ${
+        compact ? 'flex items-center gap-3 p-2' : ''
+      }`}
+    >
+      <div className={compact ? 'w-16 h-10 flex-shrink-0 bg-black/40 overflow-hidden' : 'aspect-video bg-black/40 overflow-hidden'}>
+        {asset.type === 'video' ? (
+          <video src={asset.url} muted preload="metadata" className="w-full h-full object-cover" />
+        ) : (
+          <img src={asset.url} alt={asset.name} loading="lazy" className="w-full h-full object-cover" />
+        )}
+      </div>
+      <div className={compact ? 'min-w-0' : 'p-2'}>
+        <p className="text-xs text-white/70 truncate">{asset.name}</p>
+        <p className="text-[10px] text-white/30 truncate">{asset.detail}</p>
+      </div>
+    </div>
+  );
 
   return (
     <div className="flex flex-col h-full">
       <div className="px-4 pt-3 pb-0 border-b border-white/5 flex-shrink-0">
         <div className="flex gap-1 mb-0">
-          {['scenes', 'characters'].map((t) => (
+          {['scenes', 'references', 'library'].map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -312,7 +399,7 @@ function AssetsPanel({ scenes, characters, storyId }) {
                 tab === t ? 'bg-white/10 text-white' : 'text-white/40 hover:text-white/70'
               }`}
             >
-              {t} ({t === 'scenes' ? scenes.length : characters.length})
+              {t} ({t === 'scenes' ? scenes.length : t === 'references' ? referenceAssets.length : generatedAssets.length})
             </button>
           ))}
         </div>
@@ -329,7 +416,11 @@ function AssetsPanel({ scenes, characters, storyId }) {
                 <div key={scene.id} className="flex items-center gap-3 p-2 rounded-xl bg-white/3 border border-white/5 hover:border-white/12 transition">
                   <div className="w-16 h-9 rounded-md bg-black/40 flex-shrink-0 overflow-hidden">
                     {mediaUrl ? (
-                      <img src={mediaUrl} alt="" className="w-full h-full object-cover" />
+                      scene.clip_url ? (
+                        <video src={scene.clip_url} muted preload="metadata" className="w-full h-full object-cover" />
+                      ) : (
+                        <img src={mediaUrl} alt="" loading="lazy" className="w-full h-full object-cover" />
+                      )
                     ) : (
                       <div className="w-full h-full flex items-center justify-center">
                         <Film size={10} className="text-white/15" />
@@ -347,21 +438,25 @@ function AssetsPanel({ scenes, characters, storyId }) {
           )
         )}
 
-        {tab === 'characters' && (
-          characters.length === 0 ? (
-            <div className="text-center py-8 text-white/30 text-xs">No characters yet</div>
+        {tab === 'references' && (
+          referenceAssets.length === 0 ? (
+            <div className="text-center py-8 text-white/30 text-xs">No reference images yet</div>
           ) : (
-            characters.map((char) => (
-              <div key={char.id} className="flex items-center gap-3 p-2 rounded-xl bg-white/3 border border-white/5 hover:border-white/12 transition">
-                <div className="w-8 h-8 rounded-full bg-[#dfff1e]/10 border border-[#dfff1e]/20 flex items-center justify-center flex-shrink-0">
-                  <span className="text-[#dfff1e] text-xs font-bold">{char.name?.[0]?.toUpperCase() || '?'}</span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs text-white/70 font-medium truncate">{char.name}</p>
-                  <p className="text-[10px] text-white/30 capitalize">{char.role || 'character'}</p>
-                </div>
-              </div>
-            ))
+            <div className="grid grid-cols-2 gap-2">{referenceAssets.map((asset) => renderAsset(asset))}</div>
+          )
+        )}
+
+        {tab === 'library' && (
+          isLoading ? (
+            <div className="flex items-center justify-center gap-2 py-8 text-xs text-white/40">
+              <Loader2 size={13} className="animate-spin text-[#dfff1e]" /> Loading assets…
+            </div>
+          ) : loadError ? (
+            <div className="text-center py-8 text-xs text-red-300/70">{loadError}</div>
+          ) : generatedAssets.length === 0 ? (
+            <div className="text-center py-8 text-white/30 text-xs">Generated assets will appear here</div>
+          ) : (
+            <div className="space-y-2">{generatedAssets.map((asset) => renderAsset(asset, true))}</div>
           )
         )}
       </div>
@@ -523,6 +618,7 @@ export default function Workspace() {
 
   const messagesEndRef = useRef(null);
   const pollRef        = useRef(null);
+  const lastJobStateRef = useRef('');
 
   // ── Load story + episodes + scenes + characters ────────────────────────────
 
@@ -566,8 +662,10 @@ export default function Workspace() {
           j => ['pending', 'running', 'retrying'].includes(j.status)
         );
         setActiveJob(active || null);
-        if (active) {
-          loadAll(true); // refresh scene list silently
+        const jobState = active ? `${active.id}:${active.status}` : 'idle';
+        if (jobState !== lastJobStateRef.current) {
+          lastJobStateRef.current = jobState;
+          loadAll(true); // refresh when generation starts or reaches a terminal state
         }
       } catch {}
     };
@@ -834,7 +932,12 @@ export default function Workspace() {
               />
             )}
             {activeTab === 'assets' && (
-              <AssetsPanel scenes={scenes} characters={characters} storyId={storyId} />
+              <AssetsPanel
+                scenes={scenes}
+                characters={characters}
+                storyId={storyId}
+                refreshKey={activeJob ? `${activeJob.id}:${activeJob.status}` : 'idle'}
+              />
             )}
             {activeTab === 'settings' && (
               <SettingsPanel
